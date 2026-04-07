@@ -113,6 +113,23 @@ Suggested evaluation metrics to report:
 - answer groundedness / citation precision
 - end-to-end latency
 
+## Evaluation Harness
+
+Run structured retrieval benchmarks with the built-in evaluator:
+
+```bash
+mmrag eval ./eval/datasets/starter_eval.jsonl --ingest-path ./data --k-values 1,3,5,10
+```
+
+What it reports:
+- `Recall@k` (for configured k values)
+- `MRR`
+- citation hit-rate
+- mean citation precision
+- average and p95 latency
+
+The command saves a JSON report under `.rag_store/eval_reports/` by default.
+
 ## Screenshots To Add
 
 Add these images under `docs/assets/` for a polished portfolio presentation:
