@@ -10,7 +10,7 @@ Production-style multimodal Retrieval-Augmented Generation (RAG) system for real
 ## Overview
 
 This project ingests and queries:
-- PDFs (text + table extraction)
+- PDFs (layout-aware text + table extraction)
 - images (vision captions + optional OCR)
 - CSV/TSV tabular files
 
@@ -27,6 +27,7 @@ It ships with:
 - Optional cross-encoder reranker for precision
 - Citation-rich answers (`source`, `modality`, `page`, `excerpt`)
 - Pluggable vector backends (`faiss` and `qdrant`)
+- Layout-aware PDF ingestion with table-region text dedup
 
 ## System Architecture
 
@@ -36,7 +37,7 @@ flowchart LR
     B --> B1["PDF Text + Tables"]
     B --> B2["Image Caption + OCR"]
     B --> B3["Tabular Normalization"]
-    B1 --> C["Chunking + Metadata"]
+    B1 --> C["Structure-Aware Chunking + Metadata"]
     B2 --> C
     B3 --> C
     C --> D["Embedding Layer"]

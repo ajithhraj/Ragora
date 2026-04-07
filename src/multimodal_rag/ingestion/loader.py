@@ -45,7 +45,7 @@ def ingest_files(paths: list[Path], settings: Settings) -> list[Chunk]:
     for path in paths:
         suffix = path.suffix.lower()
         if suffix == ".pdf":
-            chunks.extend(extract_pdf_chunks(path, settings, captioner))
+            chunks.extend(extract_pdf_chunks(path, settings))
         elif suffix in IMAGE_EXTENSIONS:
             chunks.extend(extract_image_chunks(path, captioner))
         elif suffix in TABLE_EXTENSIONS:
