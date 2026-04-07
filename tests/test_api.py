@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from multimodal_rag.api.app import create_app
 from multimodal_rag.api.deps import get_engine
-from multimodal_rag.models import Chunk, Modality, QueryAnswer, RetrievalHit
+from multimodal_rag.models import Citation, Chunk, Modality, QueryAnswer, RetrievalHit
 
 
 class StubEngine:
@@ -25,7 +25,14 @@ class StubEngine:
             score=0.92,
             backend="stub",
         )
-        return QueryAnswer(answer=f"stub:{question}", hits=[hit])
+        citation = Citation(
+            chunk_id="x1",
+            source_path="doc.pdf",
+            modality=Modality.TEXT,
+            page_number=3,
+            excerpt="ctx",
+        )
+        return QueryAnswer(answer=f"stub:{question}", hits=[hit], citations=[citation])
 
 
 def test_health():
@@ -47,3 +54,5 @@ def test_query_endpoint():
     assert payload["answer"] == "stub:hello"
     assert len(payload["sources"]) == 1
     assert payload["sources"][0]["modality"] == "text"
+    assert len(payload["citations"]) == 1
+    assert payload["citations"][0]["page_number"] == 3

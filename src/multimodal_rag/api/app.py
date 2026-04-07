@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, File, UploadFile
 
 from multimodal_rag.api.deps import get_engine
 from multimodal_rag.api.schemas import (
+    CitationItem,
     IngestPathsRequest,
     IngestResponse,
     QueryRequest,
@@ -69,6 +70,16 @@ def create_app() -> FastAPI:
                     score=hit.score,
                 )
                 for hit in result.hits
+            ],
+            citations=[
+                CitationItem(
+                    chunk_id=citation.chunk_id,
+                    source_path=citation.source_path,
+                    modality=citation.modality.value,
+                    page_number=citation.page_number,
+                    excerpt=citation.excerpt,
+                )
+                for citation in result.citations
             ],
         )
 

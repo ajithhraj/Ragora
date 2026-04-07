@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     qdrant_collection_prefix: str = "mmrag"
 
     retrieval_top_k_per_modality: int = Field(default=4, ge=1, le=50)
+    retrieval_top_k_lexical: int = Field(default=12, ge=1, le=200)
+    retrieval_rrf_k: int = Field(default=60, ge=1, le=500)
+    retrieval_enable_reranker: bool = False
+    retrieval_reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    retrieval_rerank_candidates: int = Field(default=20, ge=1, le=200)
 
 
 @lru_cache(maxsize=1)

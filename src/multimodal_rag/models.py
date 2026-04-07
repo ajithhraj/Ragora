@@ -47,6 +47,16 @@ class RetrievalHit:
 
 
 @dataclass(slots=True)
+class Citation:
+    chunk_id: str
+    source_path: str
+    modality: Modality
+    page_number: int | None = None
+    excerpt: str | None = None
+
+
+@dataclass(slots=True)
 class QueryAnswer:
     answer: str
     hits: list[RetrievalHit]
+    citations: list[Citation] = field(default_factory=list)

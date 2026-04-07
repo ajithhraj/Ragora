@@ -29,6 +29,15 @@ class SourceItem(BaseModel):
     score: float
 
 
+class CitationItem(BaseModel):
+    chunk_id: str
+    source_path: str
+    modality: str
+    page_number: int | None = None
+    excerpt: str | None = None
+
+
 class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceItem]
+    citations: list[CitationItem]

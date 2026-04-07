@@ -43,6 +43,13 @@ def ask(
     engine = _build_engine(backend)
     result = engine.query(question=question, collection=collection, top_k=top_k)
     typer.echo(result.answer)
+    if result.citations:
+        typer.echo("\nCitations:")
+        for citation in result.citations:
+            page = f", page={citation.page_number}" if citation.page_number is not None else ""
+            typer.echo(
+                f"- [{citation.modality.value}] {citation.source_path}{page}"
+            )
     if result.hits:
         typer.echo("\nSources:")
         for hit in result.hits:
