@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     adaptive_chunking_narrative_factor: float = Field(default=1.0, ge=0.4, le=1.5)
     adaptive_chunking_overlap_factor: float = Field(default=0.8, ge=0.2, le=1.2)
     max_context_chunks: int = 8
+    ingestion_skip_unchanged_files: bool = True
 
     orchestrator: Literal["langchain", "llamaindex"] = "langchain"
 

@@ -187,6 +187,7 @@ def test_engine_ingest_refreshes_source_without_duplicates(tmp_path, monkeypatch
         retrieval_top_k_per_modality=2,
         max_context_chunks=5,
         retrieval_enable_reranker=False,
+        ingestion_skip_unchanged_files=False,
     )
     store = FakeStore()
     engine = MultimodalRAG(settings=settings, store=store)
@@ -220,6 +221,41 @@ def test_engine_ingest_refreshes_source_without_duplicates(tmp_path, monkeypatch
     result = engine.query("content")
     assert len(result.hits) == 1
     assert result.hits[0].chunk.content == "Updated content"
+
+
+def test_engine_ingest_skips_unchanged_files_by_default(tmp_path, monkeypatch):
+    settings = Settings(
+        storage_dir=Path(tmp_path),
+        retrieval_top_k_per_modality=2,
+        max_context_chunks=5,
+        retrieval_enable_reranker=False,
+    )
+    store = FakeStore()
+    engine = MultimodalRAG(settings=settings, store=store)
+    engine.text_embedder = DummyEmbedder()  # type: ignore[assignment]
+    engine.vision_embedder = DummyVisionEmbedder()  # type: ignore[assignment]
+    engine.synthesizer = DummySynthesizer()  # type: ignore[assignment]
+
+    target_file = Path(tmp_path) / "doc.pdf"
+    target_file.write_bytes(b"v1")
+
+    calls = {"count": 0}
+
+    monkeypatch.setattr("multimodal_rag.engine.discover_files", lambda _: [target_file])
+
+    def fake_ingest_files(paths, _settings):
+        calls["count"] += 1
+        return [Chunk("doc-text-1", str(paths[0]), Modality.TEXT, f"content-{calls['count']}")]
+
+    monkeypatch.setattr("multimodal_rag.engine.ingest_files", fake_ingest_files)
+
+    engine.ingest_paths([target_file])
+    engine.ingest_paths([target_file])
+
+    target_file.write_bytes(b"v2-new-content")
+    engine.ingest_paths([target_file])
+
+    assert calls["count"] == 2
 
 
 def test_engine_query_applies_per_source_diversity_cap(tmp_path):

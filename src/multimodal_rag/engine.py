@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 from typing import Iterable, Literal
 
+import orjson
+
 from multimodal_rag.config import Settings, get_settings
 from multimodal_rag.embedding.providers import TextEmbedder, VisionEmbedder
 from multimodal_rag.generation.synthesizer import AnswerSynthesizer
@@ -52,6 +54,32 @@ class MultimodalRAG:
         tenant = self._resolve_tenant(tenant_id)
         base = self._safe_collection_name(self._resolve_collection(collection))
         return f"tenant-{tenant}__{base}"
+
+    def _manifest_path(self, scoped_collection: str) -> Path:
+        safe = re.sub(r"[^a-zA-Z0-9_-]+", "_", scoped_collection.strip().lower())
+        return self.settings.storage_dir / "manifests" / f"{safe}.json"
+
+    def _load_manifest(self, scoped_collection: str) -> dict[str, str]:
+        path = self._manifest_path(scoped_collection)
+        if not path.exists():
+            return {}
+        payload = orjson.loads(path.read_bytes())
+        if not isinstance(payload, dict):
+            return {}
+        manifest: dict[str, str] = {}
+        for key, value in payload.items():
+            manifest[str(key)] = str(value)
+        return manifest
+
+    def _save_manifest(self, scoped_collection: str, manifest: dict[str, str]) -> None:
+        path = self._manifest_path(scoped_collection)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))
+
+    @staticmethod
+    def _file_fingerprint(path: Path) -> str:
+        stat = path.stat()
+        return f"{stat.st_size}:{stat.st_mtime_ns}"
 
     def _group_by_modality(self, chunks: Iterable[Chunk]) -> dict[Modality, list[Chunk]]:
         grouped: dict[Modality, list[Chunk]] = defaultdict(list)
@@ -133,22 +161,37 @@ class MultimodalRAG:
         tenant_id: str | None = None,
     ) -> dict[str, int]:
         target_collection = self._scoped_collection(collection, tenant_id)
+        manifest = self._load_manifest(target_collection)
         files: list[Path] = []
         for raw in raw_paths:
             files.extend(discover_files(raw))
         files = sorted({path.resolve() for path in files})
-        source_paths = [str(path) for path in files]
+
+        changed_files: list[Path] = []
+        changed_source_paths: list[str] = []
+        updated_manifest = dict(manifest)
+        for path in files:
+            source_path = str(path)
+            fingerprint = self._file_fingerprint(path)
+            if (
+                self.settings.ingestion_skip_unchanged_files
+                and manifest.get(source_path) == fingerprint
+            ):
+                continue
+            changed_files.append(path)
+            changed_source_paths.append(source_path)
+            updated_manifest[source_path] = fingerprint
 
         # Idempotent source refresh: remove previous chunks for these files first.
         for modality in (Modality.TEXT, Modality.TABLE, Modality.IMAGE):
             self.store.delete_by_source(
                 target_collection,
                 modality.value,
-                source_paths,
+                changed_source_paths,
             )
-        self.lexical_index.delete_by_source(target_collection, source_paths)
+        self.lexical_index.delete_by_source(target_collection, changed_source_paths)
 
-        chunks = ingest_files(files, self.settings)
+        chunks = ingest_files(changed_files, self.settings) if changed_files else []
         grouped = self._group_by_modality(chunks)
 
         counts = {"files": len(files), "chunks": len(chunks), "text": 0, "table": 0, "image": 0}
@@ -187,6 +230,7 @@ class MultimodalRAG:
 
         # Sparse lexical index covers all textual content, including image captions.
         self.lexical_index.upsert(target_collection, chunks)
+        self._save_manifest(target_collection, updated_manifest)
 
         return counts
 

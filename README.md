@@ -31,6 +31,7 @@ It ships with:
 - Layout-aware PDF ingestion with table-region text dedup
 - Adaptive chunk sizing by section style (narrative/procedural/table-like)
 - Idempotent source refresh on re-ingest (no duplicate chunk buildup)
+- Incremental ingest skips unchanged files by fingerprint for faster refresh cycles
 
 ## System Architecture
 
@@ -180,6 +181,7 @@ Important env variables:
 - `MMRAG_DEFAULT_TENANT`
 - `MMRAG_CHUNK_SIZE`
 - `MMRAG_CHUNK_OVERLAP`
+- `MMRAG_INGESTION_SKIP_UNCHANGED_FILES`
 - `MMRAG_ADAPTIVE_CHUNKING_ENABLED`
 - `MMRAG_ADAPTIVE_CHUNKING_MIN_SIZE`
 - `MMRAG_ADAPTIVE_CHUNKING_TABLE_FACTOR`
