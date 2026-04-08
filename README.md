@@ -129,21 +129,14 @@ Optional API-key auth (recommended for deployments):
 - send the API key header (default `X-API-Key`)
 - when a tenant header is supplied, it must match the tenant bound to the API key
 
-## Benchmark Section (Portfolio-Friendly)
+## Benchmarking
 
-Use this section to publish your own numbers after running on your dataset.
-
-| Scenario | Data Size | Hardware | Avg Query Latency | p95 Latency | Notes |
-|---|---:|---|---:|---:|---|
-| Dense only | TBD | TBD | TBD | TBD | baseline |
-| Dense + BM25 + RRF | TBD | TBD | TBD | TBD | hybrid |
-| Hybrid + reranker | TBD | TBD | TBD | TBD | highest precision |
-
-Suggested evaluation metrics to report:
+The project includes built-in retrieval benchmarking and ablation tooling, plus CI smoke evaluation.
+Track and report these metrics for your datasets:
 - `Recall@k`
 - `MRR`
-- answer groundedness / citation precision
-- end-to-end latency
+- citation hit-rate / citation precision
+- average and p95 end-to-end latency
 
 ## Evaluation Harness
 
@@ -167,14 +160,6 @@ What it reports:
 - average and p95 latency
 
 The command saves a JSON report under `.rag_store/eval_reports/` by default.
-
-## Screenshots To Add
-
-Add these images under `docs/assets/` for a polished portfolio presentation:
-- API docs screenshot (`/docs`)
-- ingestion CLI run
-- query response with citations
-- architecture diagram snapshot
 
 ## Resume-Ready Outcomes
 
