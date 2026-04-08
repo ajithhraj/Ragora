@@ -4,6 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/api-fastapi-009688)
 ![Vector DB](https://img.shields.io/badge/vector-qdrant%20%7C%20faiss-5b4bdb)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://github.com/ajithhraj/multimodal-rag-system/actions/workflows/ci.yml/badge.svg)
 
 Production-style multimodal Retrieval-Augmented Generation (RAG) system for real-world documents.
 
@@ -247,6 +248,10 @@ Run `mmrag --help` for full options.
 ruff check src tests
 pytest -q
 ```
+
+CI pipeline (`.github/workflows/ci.yml`) enforces:
+- lint + tests across Python `3.10`, `3.11`, `3.12`
+- retrieval evaluation smoke run (`python scripts/run_eval_smoke.py`)
 
 ## Project Structure
 
