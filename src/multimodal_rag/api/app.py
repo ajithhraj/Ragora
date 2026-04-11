@@ -4,7 +4,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 import orjson
 
@@ -17,11 +17,18 @@ from multimodal_rag.api.schemas import (
     QueryResponse,
     SourceItem,
 )
+from multimodal_rag.config import Settings, get_settings
 from multimodal_rag.engine import MultimodalRAG
+from multimodal_rag.observability import TelemetryManager
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
+    runtime_settings = settings or get_settings()
+    telemetry = TelemetryManager(runtime_settings)
+    telemetry.setup()
     app = FastAPI(title="Multimodal RAG API", version="0.1.0")
+    app.state.settings = runtime_settings
+    app.state.telemetry = telemetry
 
     def _sse_event(event: str, payload: dict) -> str:
         json_payload = orjson.dumps(payload).decode("utf-8")
@@ -34,6 +41,42 @@ def create_app() -> FastAPI:
             return
         for index in range(0, len(clean), chunk_size):
             yield clean[index : index + chunk_size]
+
+    def _request_route(request: Request) -> str:
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None)
+        if isinstance(route_path, str) and route_path:
+            return route_path
+        return request.url.path
+
+    @app.middleware("http")
+    async def instrument_request(request: Request, call_next):
+        request_id_header = runtime_settings.request_id_header
+        request_id = telemetry.generate_request_id(request.headers.get(request_id_header))
+        request.state.request_id = request_id
+
+        route = _request_route(request)
+        start = perf_counter()
+        with telemetry.timed_span(
+            "http.request",
+            attributes={
+                "http.method": request.method,
+                "http.route": route,
+                "mmrag.request_id": request_id,
+            },
+        ):
+            try:
+                response = await call_next(request)
+                status_code = response.status_code
+            except Exception:
+                duration_ms = (perf_counter() - start) * 1000.0
+                telemetry.record_http(request.method, route, status_code=500, duration_ms=duration_ms)
+                raise
+
+        duration_ms = (perf_counter() - start) * 1000.0
+        response.headers[request_id_header] = request_id
+        telemetry.record_http(request.method, route, status_code=status_code, duration_ms=duration_ms)
+        return response
 
     def to_query_response(result, latency_ms: float) -> QueryResponse:
         return QueryResponse(
@@ -108,35 +151,65 @@ def create_app() -> FastAPI:
     @app.post("/query", response_model=QueryResponse)
     def query(
         payload: QueryRequest,
+        request: Request,
         tenant_id: str = Depends(resolve_tenant_id),
         engine: MultimodalRAG = Depends(get_engine),
     ) -> QueryResponse:
         start = perf_counter()
-        result = engine.query(
-            question=payload.question,
-            collection=payload.collection,
-            top_k=payload.top_k,
-            retrieval_mode=payload.retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        with telemetry.timed_span(
+            "rag.query",
+            attributes={
+                "http.route": "/query",
+                "mmrag.request_id": getattr(request.state, "request_id", None),
+            },
+        ):
+            result = engine.query(
+                question=payload.question,
+                collection=payload.collection,
+                top_k=payload.top_k,
+                retrieval_mode=payload.retrieval_mode,
+                tenant_id=tenant_id,
+            )
         latency_ms = (perf_counter() - start) * 1000.0
+        telemetry.record_query(
+            route="/query",
+            retrieval_mode=result.retrieval_mode,
+            corrected=result.corrected,
+            grounded=result.grounded,
+            duration_ms=latency_ms,
+        )
         return to_query_response(result, latency_ms=latency_ms)
 
     @app.post("/query-stream")
     def query_stream(
         payload: QueryRequest,
+        request: Request,
         tenant_id: str = Depends(resolve_tenant_id),
         engine: MultimodalRAG = Depends(get_engine),
     ) -> StreamingResponse:
         start = perf_counter()
-        result = engine.query(
-            question=payload.question,
-            collection=payload.collection,
-            top_k=payload.top_k,
-            retrieval_mode=payload.retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        with telemetry.timed_span(
+            "rag.query.stream",
+            attributes={
+                "http.route": "/query-stream",
+                "mmrag.request_id": getattr(request.state, "request_id", None),
+            },
+        ):
+            result = engine.query(
+                question=payload.question,
+                collection=payload.collection,
+                top_k=payload.top_k,
+                retrieval_mode=payload.retrieval_mode,
+                tenant_id=tenant_id,
+            )
         latency_ms = (perf_counter() - start) * 1000.0
+        telemetry.record_query(
+            route="/query-stream",
+            retrieval_mode=result.retrieval_mode,
+            corrected=result.corrected,
+            grounded=result.grounded,
+            duration_ms=latency_ms,
+        )
         response = to_query_response(result, latency_ms=latency_ms)
 
         def stream():
@@ -168,6 +241,7 @@ def create_app() -> FastAPI:
 
     @app.post("/query-multimodal", response_model=QueryResponse)
     async def query_multimodal(
+        request: Request,
         question: str = Form(default=""),
         image: UploadFile | None = File(default=None),
         collection: str | None = Form(default=None),
@@ -193,15 +267,29 @@ def create_app() -> FastAPI:
 
         query_text = prompt or "Find visually similar or related context for this image."
         start = perf_counter()
-        result = engine.query(
-            question=query_text,
-            collection=collection,
-            top_k=top_k,
-            query_image_path=query_image_path,
-            retrieval_mode=retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        with telemetry.timed_span(
+            "rag.query.multimodal",
+            attributes={
+                "http.route": "/query-multimodal",
+                "mmrag.request_id": getattr(request.state, "request_id", None),
+            },
+        ):
+            result = engine.query(
+                question=query_text,
+                collection=collection,
+                top_k=top_k,
+                query_image_path=query_image_path,
+                retrieval_mode=retrieval_mode,
+                tenant_id=tenant_id,
+            )
         latency_ms = (perf_counter() - start) * 1000.0
+        telemetry.record_query(
+            route="/query-multimodal",
+            retrieval_mode=result.retrieval_mode,
+            corrected=result.corrected,
+            grounded=result.grounded,
+            duration_ms=latency_ms,
+        )
         return to_query_response(result, latency_ms=latency_ms)
 
     return app

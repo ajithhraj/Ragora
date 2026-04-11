@@ -61,7 +61,7 @@ def _build_settings(tmp_path: Path, **overrides) -> Settings:
 
 
 def _build_client(engine: StubEngine) -> TestClient:
-    app = create_app()
+    app = create_app(engine.settings)
     app.dependency_overrides[get_engine] = lambda: engine
     return TestClient(app)
 
@@ -72,6 +72,18 @@ def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert "X-Request-ID" in response.headers
+
+
+def test_health_uses_custom_request_id_header(tmp_path):
+    settings = _build_settings(tmp_path, request_id_header="X-Trace-ID")
+    engine = StubEngine(settings)
+    client = _build_client(engine)
+
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert "X-Trace-ID" in response.headers
+    assert response.headers["X-Trace-ID"]
 
 
 def test_query_endpoint(tmp_path):

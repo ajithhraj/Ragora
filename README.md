@@ -71,6 +71,12 @@ pip install -e ".[dev,vision]"
 copy .env.example .env
 ```
 
+For tracing and metrics export, install with observability extras:
+
+```bash
+pip install -e ".[dev,vision,observability]"
+```
+
 ```bash
 mmrag ingest ./data --tenant acme
 mmrag ask "What are the major metrics shown in the latest PDF tables?" --tenant acme
@@ -106,6 +112,7 @@ Use the operational scripts for repeatable local deployment:
 - `POST /query`
 - `POST /query-stream` (SSE stream: meta, token deltas, citations, done)
 - `POST /query-multimodal` (multipart: question + optional image)
+- all endpoints return a request correlation header (default `X-Request-ID`)
 
 `POST /query` returns:
 - `answer`
@@ -126,6 +133,21 @@ curl -X POST http://localhost:8000/query-multimodal \
   -F "question=Find similar chart patterns" \
   -F "image=@./data/query_chart.png"
 ```
+
+## Observability (OpenTelemetry)
+
+Built-in request tracing and metrics hooks are available for production monitoring:
+- request-level instrumentation middleware with configurable request ID header
+- query latency metrics (`/query`, `/query-stream`, `/query-multimodal`)
+- OTLP HTTP exporter support (Tempo, Jaeger, Grafana, Honeycomb, etc.)
+- optional console exporter for local debugging
+
+Enable it with environment variables:
+- `MMRAG_OBSERVABILITY_ENABLED=true`
+- `MMRAG_OBSERVABILITY_SERVICE_NAME=multimodal-rag-system`
+- `MMRAG_OBSERVABILITY_OTLP_ENDPOINT=http://localhost:4318`
+- `MMRAG_OBSERVABILITY_TRACE_SAMPLE_RATIO=1.0`
+- `MMRAG_REQUEST_ID_HEADER=X-Request-ID`
 
 ## Multi-Tenant & API Auth
 
@@ -224,6 +246,12 @@ Important env variables:
 - `MMRAG_RESPONSE_REQUIRE_CITATIONS`
 - `MMRAG_RESPONSE_MIN_CITATIONS`
 - `MMRAG_RESPONSE_UNGROUNDED_FALLBACK_TEXT`
+- `MMRAG_REQUEST_ID_HEADER`
+- `MMRAG_OBSERVABILITY_ENABLED`
+- `MMRAG_OBSERVABILITY_SERVICE_NAME`
+- `MMRAG_OBSERVABILITY_OTLP_ENDPOINT`
+- `MMRAG_OBSERVABILITY_CONSOLE_EXPORTER`
+- `MMRAG_OBSERVABILITY_TRACE_SAMPLE_RATIO`
 - `MMRAG_AUTH_ENABLED`
 - `MMRAG_AUTH_API_KEY_HEADER`
 - `MMRAG_AUTH_TENANT_HEADER`

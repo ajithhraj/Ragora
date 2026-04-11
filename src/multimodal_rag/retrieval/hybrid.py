@@ -130,9 +130,16 @@ class LexicalIndex:
         if not query_tokens:
             return []
 
+        backend = "lexical-fallback"
         if state.bm25 is not None:
             raw_scores = state.bm25.get_scores(query_tokens)  # type: ignore[call-arg]
             scores = [float(score) for score in raw_scores]
+            backend = "bm25"
+            # BM25 can yield non-positive values for tiny corpora even when tokens overlap.
+            # Fall back to overlap scoring to avoid dropping valid lexical matches.
+            if not any(score > 0 for score in scores):
+                scores = self._fallback_scores(query_tokens, state.tokenized)
+                backend = "lexical-fallback"
         else:
             scores = self._fallback_scores(query_tokens, state.tokenized)
 
@@ -146,7 +153,7 @@ class LexicalIndex:
                 RetrievalHit(
                     chunk=state.chunks[idx],
                     score=score,
-                    backend="bm25" if state.bm25 is not None else "lexical-fallback",
+                    backend=backend,
                 )
             )
         return hits

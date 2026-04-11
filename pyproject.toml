@@ -38,6 +38,11 @@ vision = [
   "sentence-transformers>=3.0.0",
   "pytesseract>=0.3.10"
 ]
+observability = [
+  "opentelemetry-api>=1.28.0",
+  "opentelemetry-sdk>=1.28.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.28.0"
+]
 dev = [
   "httpx>=0.28.0",
   "pytest>=8.3.0",

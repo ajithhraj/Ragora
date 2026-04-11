@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     response_ungrounded_fallback_text: str = (
         "I do not have enough grounded evidence in the retrieved context to answer reliably."
     )
+    request_id_header: str = "X-Request-ID"
+
+    observability_enabled: bool = False
+    observability_service_name: str = "multimodal-rag-system"
+    observability_otlp_endpoint: str | None = None
+    observability_console_exporter: bool = False
+    observability_trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
 
     auth_enabled: bool = False
     auth_api_key_header: str = "X-API-Key"
