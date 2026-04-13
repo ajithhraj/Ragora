@@ -33,15 +33,19 @@ class Settings(BaseSettings):
 
     orchestrator: Literal["langchain", "llamaindex"] = "langchain"
 
+<<<<<<< HEAD
     # LLM provider selection: "openai" | "anthropic" | "ollama" | "llamaindex"
     llm_provider: Literal["openai", "anthropic", "ollama", "llamaindex"] = "openai"
 
     # OpenAI
+=======
+>>>>>>> 68ea0fea322a20c68be086fc130f76ea2035a1a7
     openai_api_key: str | None = None
     chat_model: str = "gpt-4.1-mini"
     vision_model: str = "gpt-4.1-mini"
     text_embedding_model: str = "text-embedding-3-small"
 
+<<<<<<< HEAD
     # Anthropic
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-5"
@@ -54,6 +58,8 @@ class Settings(BaseSettings):
     rate_limit_rpm: int = Field(default=60, ge=0, le=10000)
     rate_limit_enabled: bool = False
 
+=======
+>>>>>>> 68ea0fea322a20c68be086fc130f76ea2035a1a7
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_path: Path = Path(".rag_store/qdrant")
