@@ -3,17 +3,19 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
 import orjson
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
 from multimodal_rag.api.deps import get_engine, resolve_tenant_id
 from multimodal_rag.api.schemas import (
     CitationItem,
+    IngestJobItem,
     IngestPathsRequest,
     IngestResponse,
     QueryRequest,
@@ -23,11 +25,54 @@ from multimodal_rag.api.schemas import (
 from multimodal_rag.engine import MultimodalRAG
 
 _JOB_STORE: dict[str, dict] = {}
+_JOB_ORDER: deque[str] = deque()
+_MAX_INGEST_JOBS = 500
 _RATE_WINDOWS: dict[str, deque[float]] = defaultdict(deque)
 
 
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _set_job(job_id: str, status: str, **extra) -> None:
-    _JOB_STORE[job_id] = {"job_id": job_id, "status": status, **extra}
+    existing = _JOB_STORE.get(job_id)
+    now = _now_utc_iso()
+    if existing is None:
+        _JOB_ORDER.append(job_id)
+        record = {
+            "job_id": job_id,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _JOB_STORE[job_id] = record
+    else:
+        record = existing
+        record["status"] = status
+        record["updated_at"] = now
+    record.update(extra)
+
+    while len(_JOB_ORDER) > _MAX_INGEST_JOBS:
+        oldest = _JOB_ORDER.popleft()
+        _JOB_STORE.pop(oldest, None)
+
+
+def _list_jobs(status: str | None = None, limit: int = 50) -> list[dict]:
+    items = [_JOB_STORE[job_id] for job_id in reversed(_JOB_ORDER) if job_id in _JOB_STORE]
+    if status:
+        items = [item for item in items if item.get("status") == status]
+    return items[:limit]
+
+
+def _delete_job(job_id: str) -> bool:
+    if job_id not in _JOB_STORE:
+        return False
+    _JOB_STORE.pop(job_id, None)
+    try:
+        _JOB_ORDER.remove(job_id)
+    except ValueError:
+        pass
+    return True
 
 
 def _check_rate_limit(tenant_id: str, rpm: int) -> None:
@@ -49,6 +94,9 @@ def _check_rate_limit(tenant_id: str, rpm: int) -> None:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Multimodal RAG API", version="0.2.0")
+    _JOB_STORE.clear()
+    _JOB_ORDER.clear()
+    _RATE_WINDOWS.clear()
 
     def rate_limit(
         request: Request,
@@ -109,14 +157,14 @@ def create_app() -> FastAPI:
         )
         return IngestResponse(**stats)
 
-    @app.post("/ingest-files", status_code=202)
+    @app.post("/ingest-files", response_model=IngestJobItem, status_code=202)
     async def ingest_files(
         background_tasks: BackgroundTasks,
         files: list[UploadFile] = File(...),
         collection: str | None = None,
         tenant_id: str = Depends(rate_limit),
         engine: MultimodalRAG = Depends(get_engine),
-    ) -> dict:
+    ) -> IngestJobItem:
         upload_dir = engine.settings.storage_dir / "tmp_uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -141,12 +189,25 @@ def create_app() -> FastAPI:
         background_tasks.add_task(_run)
         return {"job_id": job_id, "status": "pending", "file_count": len(saved_paths)}
 
-    @app.get("/ingest-jobs/{job_id}")
+    @app.get("/ingest-jobs", response_model=list[IngestJobItem])
+    def list_ingest_jobs(
+        status: Literal["pending", "running", "done", "error"] | None = None,
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[dict]:
+        return _list_jobs(status=status, limit=limit)
+
+    @app.get("/ingest-jobs/{job_id}", response_model=IngestJobItem)
     def get_ingest_job(job_id: str) -> dict:
         job = _JOB_STORE.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
         return job
+
+    @app.delete("/ingest-jobs/{job_id}", status_code=204)
+    def delete_ingest_job(job_id: str) -> Response:
+        if not _delete_job(job_id):
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+        return Response(status_code=204)
 
     @app.post("/query", response_model=QueryResponse)
     def query(

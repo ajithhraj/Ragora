@@ -63,7 +63,9 @@ API docs: `http://localhost:8000/docs`
 | `GET` | `/health` | Service health |
 | `POST` | `/ingest-paths` | Synchronous ingest from server-side paths |
 | `POST` | `/ingest-files` | Async upload ingest; returns job id |
+| `GET` | `/ingest-jobs` | List recent async ingest jobs |
 | `GET` | `/ingest-jobs/{job_id}` | Check async ingest status |
+| `DELETE` | `/ingest-jobs/{job_id}` | Delete job metadata |
 | `POST` | `/query` | JSON query response with citations |
 | `POST` | `/query-stream` | SSE streaming query tokens |
 | `POST` | `/query-multimodal` | Multipart query with optional image |
