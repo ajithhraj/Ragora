@@ -161,6 +161,15 @@ Enable it with environment variables:
 - `MMRAG_OBSERVABILITY_TRACE_SAMPLE_RATIO=1.0`
 - `MMRAG_REQUEST_ID_HEADER=X-Request-ID`
 
+## Rate Limiting
+
+Optional token-bucket limiting is available for query endpoints (`/query`, `/query-stream`, `/query-multimodal`):
+- `MMRAG_RATE_LIMIT_ENABLED=true`
+- `MMRAG_RATE_LIMIT_REQUESTS_PER_MINUTE=120`
+- `MMRAG_RATE_LIMIT_BURST=60`
+
+When throttled, the API responds with HTTP `429` and `Retry-After`.
+
 ## Multi-Tenant & API Auth
 
 Tenant scoping is enabled by default across ingestion and retrieval:
@@ -263,6 +272,9 @@ Important env variables:
 - `MMRAG_RESPONSE_MIN_CITATIONS`
 - `MMRAG_RESPONSE_UNGROUNDED_FALLBACK_TEXT`
 - `MMRAG_REQUEST_ID_HEADER`
+- `MMRAG_RATE_LIMIT_ENABLED`
+- `MMRAG_RATE_LIMIT_REQUESTS_PER_MINUTE`
+- `MMRAG_RATE_LIMIT_BURST`
 - `MMRAG_OBSERVABILITY_ENABLED`
 - `MMRAG_OBSERVABILITY_SERVICE_NAME`
 - `MMRAG_OBSERVABILITY_OTLP_ENDPOINT`

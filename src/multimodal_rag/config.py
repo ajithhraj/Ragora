@@ -76,6 +76,9 @@ class Settings(BaseSettings):
         "I do not have enough grounded evidence in the retrieved context to answer reliably."
     )
     request_id_header: str = "X-Request-ID"
+    rate_limit_enabled: bool = False
+    rate_limit_requests_per_minute: int = Field(default=120, ge=1, le=5000)
+    rate_limit_burst: int = Field(default=60, ge=1, le=10000)
 
     observability_enabled: bool = False
     observability_service_name: str = "multimodal-rag-system"

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import orjson
 
 from multimodal_rag.api.deps import get_engine, resolve_tenant_id
 from multimodal_rag.api.jobs import IngestJobManager, IngestJobRecord
+from multimodal_rag.api.rate_limit import RateLimiter
 from multimodal_rag.api.schemas import (
     CitationItem,
     IngestJobResponse,
@@ -33,10 +35,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ttl_seconds=runtime_settings.ingestion_jobs_ttl_seconds,
         max_retained=runtime_settings.ingestion_jobs_max_retained,
     )
+    rate_limiter = RateLimiter(
+        requests_per_minute=runtime_settings.rate_limit_requests_per_minute,
+        burst=runtime_settings.rate_limit_burst,
+    )
+    rate_limited_paths = {
+        "/query",
+        "/query-stream",
+        "/query-multimodal",
+    }
     app = FastAPI(title="Multimodal RAG API", version="0.1.0")
     app.state.settings = runtime_settings
     app.state.telemetry = telemetry
     app.state.ingest_jobs = ingest_jobs
+    app.state.rate_limiter = rate_limiter
 
     def _sse_event(event: str, payload: dict) -> str:
         json_payload = orjson.dumps(payload).decode("utf-8")
@@ -65,6 +77,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         route = _request_route(request)
         start = perf_counter()
+        if runtime_settings.rate_limit_enabled and route in rate_limited_paths:
+            tenant_raw = request.headers.get(runtime_settings.auth_tenant_header)
+            tenant_id = runtime_settings.normalize_tenant_id(tenant_raw or runtime_settings.default_tenant)
+            key = f"{tenant_id}:{request.method}:{route}"
+            allowed, retry_after = rate_limiter.allow(key)
+            if not allowed:
+                duration_ms = (perf_counter() - start) * 1000.0
+                telemetry.record_http(request.method, route, status_code=429, duration_ms=duration_ms)
+                retry_after_seconds = max(1, int(math.ceil(retry_after)))
+                headers = {
+                    request_id_header: request_id,
+                    "Retry-After": str(retry_after_seconds),
+                }
+                return JSONResponse(
+                    status_code=429,
+                    headers=headers,
+                    content={"detail": "Rate limit exceeded. Retry later."},
+                )
+
         with telemetry.timed_span(
             "http.request",
             attributes={

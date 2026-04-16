@@ -304,3 +304,21 @@ def test_ingest_jobs_requires_non_empty_paths(tmp_path):
 
     response = client.post("/ingest-jobs", json={"paths": []})
     assert response.status_code == 422
+
+
+def test_query_rate_limit_returns_429(tmp_path):
+    settings = _build_settings(
+        tmp_path,
+        rate_limit_enabled=True,
+        rate_limit_requests_per_minute=1,
+        rate_limit_burst=1,
+    )
+    engine = StubEngine(settings)
+    client = _build_client(engine)
+
+    first = client.post("/query", json={"question": "hello"})
+    assert first.status_code == 200
+
+    second = client.post("/query", json={"question": "hello"})
+    assert second.status_code == 429
+    assert "Retry-After" in second.headers

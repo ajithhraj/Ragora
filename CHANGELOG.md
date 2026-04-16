@@ -11,6 +11,7 @@ All notable changes to this project are documented here.
   - `GET /ingest-jobs` to list recent jobs
 - In-memory job manager with lifecycle states (`queued`, `running`, `completed`, `failed`)
 - Config knobs for async ingestion workers, retention, and TTL
+- Optional token-bucket rate limiting for query endpoints with `429` + `Retry-After`
 
 ### Improved
 - Validation for ingestion paths requests now enforces non-empty `paths`
