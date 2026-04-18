@@ -5,9 +5,6 @@ import logging
 import mimetypes
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-
 from multimodal_rag.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -19,12 +16,23 @@ class VisionCaptioner:
         self._model_name = settings.vision_model
         self._api_key = settings.openai_api_key
         self._llm = None
+        self._human_message_type = None
+        self._system_message_type = None
         if self._enabled:
-            self._llm = ChatOpenAI(
-                model=self._model_name,
-                api_key=self._api_key,
-                temperature=0.0,
-            )
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+                from langchain_openai import ChatOpenAI
+
+                self._human_message_type = HumanMessage
+                self._system_message_type = SystemMessage
+                self._llm = ChatOpenAI(
+                    model=self._model_name,
+                    api_key=self._api_key,
+                    temperature=0.0,
+                )
+            except Exception as exc:  # pragma: no cover - optional dependency branch
+                logger.warning("OpenAI vision captioner unavailable, using filename-only captions: %s", exc)
+                self._llm = None
 
     @staticmethod
     def _to_data_url(image_path: Path) -> str:
@@ -33,10 +41,10 @@ class VisionCaptioner:
         return f"data:{mime_type};base64,{encoded}"
 
     def caption(self, image_path: Path) -> str:
-        if not self._llm:
+        if not self._llm or self._human_message_type is None or self._system_message_type is None:
             return f"Image file named {image_path.name}."
         try:
-            message = HumanMessage(
+            message = self._human_message_type(
                 content=[
                     {
                         "type": "text",
@@ -55,7 +63,7 @@ class VisionCaptioner:
             )
             response = self._llm.invoke(
                 [
-                    SystemMessage(
+                    self._system_message_type(
                         content="You write concise factual image descriptions for semantic retrieval."
                     ),
                     message,

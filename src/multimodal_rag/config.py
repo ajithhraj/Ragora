@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Multimodal RAG System"
+    app_name: str = "Ragora"
     storage_dir: Path = Path(".rag_store")
     collection: str = "default"
     default_tenant: str = "public"
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     ingestion_skip_unchanged_files: bool = True
 
     orchestrator: Literal["langchain", "llamaindex"] = "langchain"
-    llm_provider: Literal["openai", "anthropic", "ollama", "llamaindex"] = "openai"
+    llm_provider: Literal["local", "openai", "anthropic", "ollama", "llamaindex"] = "local"
 
     openai_api_key: str | None = None
     chat_model: str = "gpt-4.1-mini"
@@ -47,11 +47,10 @@ class Settings(BaseSettings):
 
     rate_limit_rpm: int = Field(default=60, ge=0, le=10000)
     rate_limit_enabled: bool = False
-
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_path: Path = Path(".rag_store/qdrant")
-    qdrant_collection_prefix: str = "mmrag"
+    qdrant_collection_prefix: str = "ragora"
 
     retrieval_top_k_per_modality: int = Field(default=4, ge=1, le=50)
     retrieval_top_k_lexical: int = Field(default=12, ge=1, le=200)
@@ -101,16 +100,13 @@ class Settings(BaseSettings):
         mapping: dict[str, str] = {}
         for item in value.split(","):
             pair = item.strip()
-            if not pair:
-                continue
-            if ":" not in pair:
+            if not pair or ":" not in pair:
                 continue
             tenant_raw, key_raw = pair.split(":", 1)
             tenant = self.normalize_tenant_id(tenant_raw)
             key = key_raw.strip()
-            if not key:
-                continue
-            mapping[tenant] = key
+            if key:
+                mapping[tenant] = key
         return mapping
 
 

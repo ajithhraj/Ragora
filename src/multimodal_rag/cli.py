@@ -19,7 +19,7 @@ from multimodal_rag.eval import (
     save_evaluation_report,
 )
 
-app = typer.Typer(help="Multimodal RAG CLI")
+app = typer.Typer(help="Ragora local multimodal RAG CLI")
 
 
 def _build_engine(backend: Literal["faiss", "qdrant"] | None = None) -> MultimodalRAG:

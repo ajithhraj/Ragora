@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Iterator
 
 from multimodal_rag.config import Settings
 from multimodal_rag.models import RetrievalHit
 
 logger = logging.getLogger(__name__)
+
+STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "is",
+    "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when", "where",
+    "which", "who", "with", "your",
+}
+TOKEN_RE = re.compile(r"[A-Za-z0-9_.%/-]+")
+SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def _format_context(hits: list[RetrievalHit]) -> str:
@@ -29,7 +38,7 @@ def _format_context(hits: list[RetrievalHit]) -> str:
 
 def _system_prompt() -> str:
     return (
-        "You are an enterprise multimodal RAG assistant. "
+        "You are Ragora, a grounded multimodal RAG assistant. "
         "Answer strictly from supplied context and admit uncertainty when context is insufficient."
     )
 
@@ -45,10 +54,46 @@ def _user_prompt(question: str, context: str) -> str:
     )
 
 
+def _tokenize(text: str) -> list[str]:
+    return [token.lower() for token in TOKEN_RE.findall(text)]
+
+
+def _question_terms(question: str) -> set[str]:
+    return {token for token in _tokenize(question) if token not in STOPWORDS and len(token) > 1}
+
+
+def _sentence_candidates(hit: RetrievalHit) -> list[str]:
+    raw_parts = [part.strip() for part in SPLIT_RE.split(hit.chunk.content) if part.strip()]
+    if raw_parts:
+        return raw_parts
+    clean = " ".join(hit.chunk.content.split()).strip()
+    return [clean] if clean else []
+
+
+def _line_score(question_terms: set[str], line: str, hit: RetrievalHit) -> float:
+    terms = set(_tokenize(line))
+    overlap = len(question_terms & terms)
+    density_bonus = min(len(line) / 180.0, 1.0) * 0.15
+    numeric_bonus = 0.2 if any(ch.isdigit() for ch in line) else 0.0
+    return float(hit.score) + overlap * 0.45 + density_bonus + numeric_bonus
+
+
+def _dedupe_preserve_order(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    kept: list[str] = []
+    for line in lines:
+        key = line.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        kept.append(line)
+    return kept
+
+
 class AnswerSynthesizer:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._llm_provider = (settings.llm_provider or "openai").lower()
+        self._llm_provider = (settings.llm_provider or "local").lower()
 
     def _get_langchain_llm(self):
         if not self.settings.openai_api_key:
@@ -76,7 +121,7 @@ class AnswerSynthesizer:
     def _generate_langchain(self, question: str, hits: list[RetrievalHit]) -> str:
         llm = self._get_langchain_llm()
         if not llm:
-            return self._fallback_answer(question, hits)
+            return self._generate_local(question, hits)
         context = _format_context(hits)
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -89,13 +134,13 @@ class AnswerSynthesizer:
             )
             return self._chunk_to_text(response.content).strip()
         except Exception as exc:
-            logger.warning("OpenAI generation failed: %s", exc)
-            return self._fallback_answer(question, hits)
+            logger.warning("LangChain generation failed: %s", exc)
+            return self._generate_local(question, hits)
 
     def _stream_langchain(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
         llm = self._get_langchain_llm()
         if not llm:
-            yield self._fallback_answer(question, hits)
+            yield self._generate_local(question, hits)
             return
 
         context = _format_context(hits)
@@ -112,12 +157,13 @@ class AnswerSynthesizer:
                 if text:
                     yield text
         except Exception as exc:
-            logger.warning("OpenAI streaming failed: %s", exc)
-            yield self._fallback_answer(question, hits)
+            logger.warning("LangChain streaming failed: %s", exc)
+            yield self._generate_local(question, hits)
 
     def _generate_anthropic(self, question: str, hits: list[RetrievalHit]) -> str:
         if not self.settings.anthropic_api_key:
-            return self._fallback_answer(question, hits)
+            logger.warning("anthropic_api_key not set; using local synthesis")
+            return self._generate_local(question, hits)
         try:
             import anthropic
 
@@ -134,11 +180,11 @@ class AnswerSynthesizer:
             return self._fallback_answer(question, hits)
         except Exception as exc:
             logger.warning("Anthropic generation failed: %s", exc)
-            return self._fallback_answer(question, hits)
+            return self._generate_local(question, hits)
 
     def _stream_anthropic(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
         if not self.settings.anthropic_api_key:
-            yield self._fallback_answer(question, hits)
+            yield self._generate_local(question, hits)
             return
         try:
             import anthropic
@@ -156,7 +202,7 @@ class AnswerSynthesizer:
                         yield text
         except Exception as exc:
             logger.warning("Anthropic streaming failed: %s", exc)
-            yield self._fallback_answer(question, hits)
+            yield self._generate_local(question, hits)
 
     def _generate_ollama(self, question: str, hits: list[RetrievalHit]) -> str:
         try:
@@ -177,7 +223,7 @@ class AnswerSynthesizer:
             return response.json().get("response", "").strip()
         except Exception as exc:
             logger.warning("Ollama generation failed: %s", exc)
-            return self._fallback_answer(question, hits)
+            return self._generate_local(question, hits)
 
     def _stream_ollama(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
         try:
@@ -207,12 +253,15 @@ class AnswerSynthesizer:
                         break
         except Exception as exc:
             logger.warning("Ollama streaming failed: %s", exc)
-            yield self._fallback_answer(question, hits)
+            yield self._generate_local(question, hits)
 
     def _generate_llamaindex(self, question: str, hits: list[RetrievalHit]) -> str:
         try:
             from llama_index.core import Document, SummaryIndex
 
+            llm = self._get_langchain_llm()
+            if not llm:
+                return self._generate_local(question, hits)
             docs = [Document(text=hit.chunk.content, doc_id=hit.chunk.chunk_id) for hit in hits]
             if not docs:
                 return "I could not find relevant context in the index."
@@ -223,9 +272,41 @@ class AnswerSynthesizer:
                 f"{question}\n"
             )
             content = str(result).strip()
-            return content if content else self._fallback_answer(question, hits)
+            return content if content else self._generate_local(question, hits)
         except Exception:
-            return self._generate_langchain(question, hits)
+            return self._generate_local(question, hits)
+
+    @staticmethod
+    def _source_name(path: str) -> str:
+        return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+    def _generate_local(self, question: str, hits: list[RetrievalHit]) -> str:
+        if not hits:
+            return "I could not find relevant context in the indexed sources."
+
+        question_terms = _question_terms(question)
+        ranked_lines: list[tuple[float, str, RetrievalHit]] = []
+        for hit in hits[:8]:
+            for line in _sentence_candidates(hit):
+                ranked_lines.append((_line_score(question_terms, line, hit), line, hit))
+
+        ranked_lines.sort(key=lambda item: item[0], reverse=True)
+        best_lines = _dedupe_preserve_order([line for _, line, _ in ranked_lines])[:3]
+        top_sources = _dedupe_preserve_order([self._source_name(hit.chunk.source_path) for hit in hits])[:3]
+
+        if not best_lines:
+            return self._fallback_answer(question, hits)
+
+        lead = best_lines[0]
+        if lead[-1] not in ".!?":
+            lead = f"{lead}."
+        source_text = ", ".join(top_sources)
+
+        if len(best_lines) == 1:
+            return f"{lead} Source: {source_text}."
+
+        supporting = "\n".join(f"- {line}" for line in best_lines[1:])
+        return f"{lead} Sources: {source_text}.\n\nSupporting details:\n{supporting}"
 
     @staticmethod
     def _fallback_answer(question: str, hits: list[RetrievalHit]) -> str:
@@ -241,6 +322,8 @@ class AnswerSynthesizer:
 
     def generate(self, question: str, hits: list[RetrievalHit]) -> str:
         provider = self._llm_provider
+        if provider == "local":
+            return self._generate_local(question, hits)
         if provider == "anthropic":
             return self._generate_anthropic(question, hits)
         if provider == "ollama":
@@ -251,13 +334,13 @@ class AnswerSynthesizer:
 
     def stream(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
         provider = self._llm_provider
-        if provider == "anthropic":
+        if provider == "local":
+            yield self._generate_local(question, hits)
+        elif provider == "anthropic":
             yield from self._stream_anthropic(question, hits)
-            return
-        if provider == "ollama":
+        elif provider == "ollama":
             yield from self._stream_ollama(question, hits)
-            return
-        if provider == "llamaindex":
+        elif provider == "llamaindex":
             yield self._generate_llamaindex(question, hits)
-            return
-        yield from self._stream_langchain(question, hits)
+        else:
+            yield from self._stream_langchain(question, hits)

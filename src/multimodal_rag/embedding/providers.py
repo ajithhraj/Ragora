@@ -4,12 +4,16 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from langchain_openai import OpenAIEmbeddings
 
 from multimodal_rag.config import Settings
 from multimodal_rag.embedding.hash_embedder import HashEmbedder
 
 logger = logging.getLogger(__name__)
+
+try:
+    from langchain_openai import OpenAIEmbeddings
+except Exception:  # pragma: no cover - optional dependency branch
+    OpenAIEmbeddings = None  # type: ignore[assignment]
 
 
 class TextEmbedder:
@@ -17,10 +21,13 @@ class TextEmbedder:
         self._fallback = HashEmbedder(dimensions=384)
         self._openai = None
         if settings.openai_api_key:
-            self._openai = OpenAIEmbeddings(
-                model=settings.text_embedding_model,
-                api_key=settings.openai_api_key,
-            )
+            if OpenAIEmbeddings is None:
+                logger.warning("langchain_openai not available, using local hash embeddings.")
+            else:
+                self._openai = OpenAIEmbeddings(
+                    model=settings.text_embedding_model,
+                    api_key=settings.openai_api_key,
+                )
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:

@@ -3,9 +3,9 @@ requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "multimodal-rag-system"
+name = "ragora"
 version = "0.1.0"
-description = "Production-style multimodal RAG package for PDFs, images, and tables."
+description = "Ragora: local-first multimodal RAG app for PDFs, images, and tables."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
@@ -52,6 +52,7 @@ dev = [
 
 [project.scripts]
 mmrag = "multimodal_rag.cli:app"
+ragora = "multimodal_rag.cli:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

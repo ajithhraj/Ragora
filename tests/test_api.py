@@ -74,6 +74,15 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
+def test_root_serves_ui():
+    app = create_app()
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Ragora" in response.text
+
+
 def test_query_endpoint(tmp_path):
     settings = _build_settings(tmp_path)
     engine = StubEngine(settings)
@@ -248,7 +257,8 @@ def test_ingest_jobs_list_and_delete(tmp_path):
 
     list_response = client.get("/ingest-jobs")
     assert list_response.status_code == 200
-    jobs = list_response.json()
+    payload = list_response.json()
+    jobs = payload["jobs"]
     assert any(job["job_id"] == job_id for job in jobs)
 
     get_response = client.get(f"/ingest-jobs/{job_id}")

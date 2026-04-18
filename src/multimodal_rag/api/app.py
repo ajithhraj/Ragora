@@ -10,12 +10,12 @@ from typing import Literal
 
 import orjson
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 
 from multimodal_rag.api.deps import get_engine, resolve_tenant_id
 from multimodal_rag.api.schemas import (
     CitationItem,
-    IngestJobItem,
     IngestPathsRequest,
     IngestResponse,
     QueryRequest,
@@ -93,10 +93,17 @@ def _check_rate_limit(tenant_id: str, rpm: int) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Multimodal RAG API", version="0.2.0")
+    app = FastAPI(title="Ragora API", version="0.3.0")
     _JOB_STORE.clear()
     _JOB_ORDER.clear()
     _RATE_WINDOWS.clear()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     def rate_limit(
         request: Request,
@@ -110,6 +117,34 @@ def create_app() -> FastAPI:
     def _sse_event(event: str, payload: dict) -> str:
         json_payload = orjson.dumps(payload).decode("utf-8")
         return f"event: {event}\ndata: {json_payload}\n\n"
+
+    def _resolve_source_file(path_value: str) -> Path:
+        raw = Path(path_value).expanduser()
+        resolved = (Path.cwd() / raw).resolve() if not raw.is_absolute() else raw.resolve()
+        if not resolved.exists() or not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Source file not found.")
+        return resolved
+
+    def _ui_path() -> Path:
+        repo_dir = Path(__file__).resolve().parents[3]
+        package_dir = Path(__file__).resolve().parents[1]
+        candidates = [
+            repo_dir / "face_of_ragora.html",
+            repo_dir / "multimodal_rag_ui.html",
+            package_dir / "web" / "face_of_ragora.html",
+            package_dir / "web" / "multimodal_rag_ui.html",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise HTTPException(status_code=404, detail="Ragora UI file not found.")
+
+    def _fallback_stream_tokens(answer: str, chunk_size: int = 64):
+        text = answer or ""
+        if not text:
+            return
+        for index in range(0, len(text), chunk_size):
+            yield text[index : index + chunk_size]
 
     def to_query_response(result, latency_ms: float) -> QueryResponse:
         return QueryResponse(
@@ -144,6 +179,23 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/")
+    def root() -> FileResponse:
+        return FileResponse(path=_ui_path(), media_type="text/html")
+
+    @app.get("/ui")
+    def ui() -> FileResponse:
+        return root()
+
+    @app.get("/source-file")
+    def source_file(
+        path: str,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> FileResponse:
+        file_path = _resolve_source_file(path)
+        return FileResponse(path=file_path, filename=file_path.name)
+
     @app.post("/ingest-paths", response_model=IngestResponse)
     def ingest_paths(
         payload: IngestPathsRequest,
@@ -157,46 +209,48 @@ def create_app() -> FastAPI:
         )
         return IngestResponse(**stats)
 
-    @app.post("/ingest-files", response_model=IngestJobItem, status_code=202)
+    @app.post("/ingest-files", status_code=202)
     async def ingest_files(
         background_tasks: BackgroundTasks,
         files: list[UploadFile] = File(...),
         collection: str | None = None,
         tenant_id: str = Depends(rate_limit),
         engine: MultimodalRAG = Depends(get_engine),
-    ) -> IngestJobItem:
+    ) -> dict:
         upload_dir = engine.settings.storage_dir / "tmp_uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
 
         saved_paths: list[Path] = []
         for upload in files:
-            target = upload_dir / upload.filename
+            safe_name = Path(upload.filename or "").name or "upload.bin"
+            target = upload_dir / f"{uuid.uuid4().hex}_{safe_name}"
             content = await upload.read()
             target.write_bytes(content)
             saved_paths.append(target)
 
         job_id = str(uuid.uuid4())
-        _set_job(job_id, "pending", file_count=len(saved_paths))
+        file_paths = [str(path) for path in saved_paths]
+        _set_job(job_id, "pending", file_count=len(saved_paths), files=file_paths)
 
         def _run() -> None:
             try:
-                _set_job(job_id, "running")
+                _set_job(job_id, "running", files=file_paths)
                 stats = engine.ingest_paths(saved_paths, collection=collection, tenant_id=tenant_id)
-                _set_job(job_id, "done", result=stats)
+                _set_job(job_id, "done", result=stats, files=file_paths)
             except Exception as exc:
-                _set_job(job_id, "error", error=str(exc))
+                _set_job(job_id, "error", error=str(exc), files=file_paths)
 
         background_tasks.add_task(_run)
         return {"job_id": job_id, "status": "pending", "file_count": len(saved_paths)}
 
-    @app.get("/ingest-jobs", response_model=list[IngestJobItem])
+    @app.get("/ingest-jobs")
     def list_ingest_jobs(
         status: Literal["pending", "running", "done", "error"] | None = None,
-        limit: int = Query(default=50, ge=1, le=200),
-    ) -> list[dict]:
-        return _list_jobs(status=status, limit=limit)
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict:
+        return {"jobs": _list_jobs(status=status, limit=limit)}
 
-    @app.get("/ingest-jobs/{job_id}", response_model=IngestJobItem)
+    @app.get("/ingest-jobs/{job_id}")
     def get_ingest_job(job_id: str) -> dict:
         job = _JOB_STORE.get(job_id)
         if not job:
@@ -254,7 +308,12 @@ def create_app() -> FastAPI:
                 },
             )
             full_answer_parts: list[str] = []
-            for idx, token in enumerate(engine.synthesizer.stream(payload.question, retrieval_result.hits), start=1):
+            synthesizer = getattr(engine, "synthesizer", None)
+            if synthesizer is not None and hasattr(synthesizer, "stream"):
+                token_iter = synthesizer.stream(payload.question, retrieval_result.hits)
+            else:
+                token_iter = _fallback_stream_tokens(response.answer)
+            for idx, token in enumerate(token_iter, start=1):
                 full_answer_parts.append(token)
                 yield _sse_event("token", {"index": idx, "delta": token})
             full_answer = "".join(full_answer_parts)
@@ -265,7 +324,7 @@ def create_app() -> FastAPI:
             yield _sse_event(
                 "done",
                 {
-                    "answer": full_answer,
+                    "answer": full_answer or response.answer,
                     "source_count": len(response.sources),
                     "citation_count": len(response.citations),
                     "latency_ms": (perf_counter() - start) * 1000.0,
@@ -294,7 +353,7 @@ def create_app() -> FastAPI:
         if image is not None:
             query_dir = engine.settings.storage_dir / "tmp_queries"
             query_dir.mkdir(parents=True, exist_ok=True)
-            filename = image.filename or "query_image.bin"
+            filename = Path(image.filename or "query_image.bin").name
             query_image_path = query_dir / filename
             content = await image.read()
             query_image_path.write_bytes(content)
