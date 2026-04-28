@@ -5,7 +5,7 @@
 ![Vector DB](https://img.shields.io/badge/vector-qdrant%20%7C%20faiss-5b4bdb)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A local-first, production-style multimodal RAG system that ingests PDFs, images, and tabular data, then answers with grounded citations through a backend-served UI, CLI, and REST API.
+A production-style multimodal RAG system that ingests PDFs, images, and tabular data, then answers with grounded citations through a backend-served UI, CLI, and REST API. With one OpenAI API key, Ragora can run generation, embeddings, and image understanding end-to-end.
 
 ## Local Run
 
@@ -15,6 +15,11 @@ cd C:\Users\ajith\Downloads\model-rag\Ragora-v2
 ```
 
 Then open `http://127.0.0.1:8000`.
+
+If `MMRAG_OPENAI_API_KEY` is set, Ragora automatically switches into OpenAI mode for:
+- answer generation
+- text embeddings
+- image captioning and image-query understanding
 
 ---
 
@@ -37,6 +42,7 @@ Retrieval combines dense vector search, BM25 lexical search, and Reciprocal Rank
 - Hybrid dense + lexical retrieval with RRF
 - Backend-served UI at `/` and `/ui`
 - Citation-rich answers with file path, modality, page, and excerpt
+- Single-key OpenAI mode for end-to-end hosted inference
 - Local-first mode with no external API required
 - Optional OpenAI, Anthropic, Ollama, or LlamaIndex-backed generation
 - Layout-aware PDF parsing and adaptive chunking
@@ -100,7 +106,24 @@ pip install -e ".[dev,vision]"
 cp .env.example .env
 ```
 
-Keep `MMRAG_LLM_PROVIDER=local` for fully local mode.
+### One-key OpenAI mode
+
+Set just this in `.env`:
+
+```env
+MMRAG_OPENAI_API_KEY=your_key_here
+```
+
+Leave `MMRAG_LLM_PROVIDER=auto` and Ragora will use OpenAI for generation, text embeddings, and image understanding automatically.
+
+### Fully local mode
+
+Keep:
+
+```env
+MMRAG_LLM_PROVIDER=local
+MMRAG_OPENAI_API_KEY=
+```
 
 ### Ingest and query
 
@@ -170,8 +193,8 @@ All major behavior is configured through `.env.example`.
 
 | Variable | Description |
 |---|---|
-| `MMRAG_LLM_PROVIDER` | `local`, `openai`, `anthropic`, `ollama`, or `llamaindex` |
-| `MMRAG_OPENAI_API_KEY` | OpenAI API key for embeddings and generation |
+| `MMRAG_LLM_PROVIDER` | `auto`, `local`, `openai`, `anthropic`, `ollama`, or `llamaindex` |
+| `MMRAG_OPENAI_API_KEY` | One key for OpenAI generation, embeddings, and image understanding |
 | `MMRAG_VECTOR_BACKEND` | `faiss` or `qdrant` |
 | `MMRAG_STORAGE_DIR` | Local storage directory |
 | `MMRAG_COLLECTION` | Vector store collection name |

@@ -29,7 +29,7 @@ class MultimodalRAG:
         self.settings = settings
         self.store = store or create_vector_store(settings)
         self.text_embedder = TextEmbedder(settings)
-        self.vision_embedder = VisionEmbedder()
+        self.vision_embedder = VisionEmbedder(settings, self.text_embedder)
         self.synthesizer = AnswerSynthesizer(settings)
         self.lexical_index = LexicalIndex(settings.storage_dir / "lexical")
         self.reranker = CrossEncoderReranker(
@@ -262,12 +262,7 @@ class MultimodalRAG:
 
     def _build_vision_query_vector(self, question: str, query_image_path: Path | None) -> list[float]:
         if query_image_path and query_image_path.exists():
-            vectors = self.vision_embedder.embed_images(
-                [query_image_path],
-                [question or query_image_path.name],
-            )
-            if vectors:
-                return vectors[0]
+            return self.vision_embedder.embed_query(question or query_image_path.name, image_path=query_image_path)
         return self.vision_embedder.embed_query(question)
 
     @staticmethod

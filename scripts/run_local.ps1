@@ -9,7 +9,9 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 Push-Location $root
 try {
-  $env:MMRAG_LLM_PROVIDER = "local"
+  if (-not $env:MMRAG_LLM_PROVIDER) {
+    $env:MMRAG_LLM_PROVIDER = "auto"
+  }
   $env:MMRAG_VECTOR_BACKEND = "faiss"
   $env:MMRAG_AUTH_ENABLED = "false"
   & $python -m uvicorn multimodal_rag.api.app:app --host 127.0.0.1 --port 8000

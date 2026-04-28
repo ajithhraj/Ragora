@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class VisionCaptioner:
     def __init__(self, settings: Settings):
-        self._enabled = bool(settings.openai_api_key)
+        self._enabled = settings.has_openai_api_key()
         self._model_name = settings.vision_model
         self._api_key = settings.openai_api_key
         self._llm = None

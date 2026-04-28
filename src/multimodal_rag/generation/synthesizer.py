@@ -93,10 +93,10 @@ def _dedupe_preserve_order(lines: list[str]) -> list[str]:
 class AnswerSynthesizer:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._llm_provider = (settings.llm_provider or "local").lower()
+        self._llm_provider = settings.resolved_llm_provider()
 
     def _get_langchain_llm(self):
-        if not self.settings.openai_api_key:
+        if not self.settings.has_openai_api_key():
             return None
         try:
             from langchain_openai import ChatOpenAI

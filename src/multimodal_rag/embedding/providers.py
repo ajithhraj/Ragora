@@ -7,6 +7,7 @@ import numpy as np
 
 from multimodal_rag.config import Settings
 from multimodal_rag.embedding.hash_embedder import HashEmbedder
+from multimodal_rag.ingestion.vision import VisionCaptioner, run_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,10 @@ except Exception:  # pragma: no cover - optional dependency branch
 
 class TextEmbedder:
     def __init__(self, settings: Settings):
+        self.settings = settings
         self._fallback = HashEmbedder(dimensions=384)
         self._openai = None
-        if settings.openai_api_key:
+        if settings.has_openai_api_key():
             if OpenAIEmbeddings is None:
                 logger.warning("langchain_openai not available, using local hash embeddings.")
             else:
@@ -28,6 +30,10 @@ class TextEmbedder:
                     model=settings.text_embedding_model,
                     api_key=settings.openai_api_key,
                 )
+
+    @property
+    def uses_openai(self) -> bool:
+        return self._openai is not None
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -51,23 +57,56 @@ class TextEmbedder:
 class VisionEmbedder:
     """Image-aware embedder.
 
-    Uses CLIP from sentence-transformers when available.
-    Falls back to deterministic text hashing if CLIP is unavailable.
+    OpenAI mode:
+    - indexes images using their caption/OCR text via the text embedding model
+    - can caption a query image, then embed that caption for retrieval
+
+    Local mode:
+    - uses CLIP from sentence-transformers when available
+    - falls back to deterministic text hashing if CLIP is unavailable
     """
 
-    def __init__(self):
+    def __init__(self, settings: Settings, text_embedder: TextEmbedder):
+        self.settings = settings
+        self._text_embedder = text_embedder
         self._fallback = HashEmbedder(dimensions=384)
+        self._captioner = VisionCaptioner(settings)
         self._clip = None
-        try:
-            from sentence_transformers import SentenceTransformer
+        self._openai_mode = text_embedder.uses_openai
 
-            self._clip = SentenceTransformer("clip-ViT-B-32")
-        except Exception:
-            self._clip = None
+        if not self._openai_mode:
+            try:
+                from sentence_transformers import SentenceTransformer
+
+                self._clip = SentenceTransformer("clip-ViT-B-32")
+            except Exception:
+                self._clip = None
+
+    @staticmethod
+    def _clean_text(value: str | None) -> str:
+        return " ".join((value or "").split()).strip()
+
+    def _build_query_text(self, text: str, image_path: Path | None = None) -> str:
+        parts: list[str] = []
+        clean_text = self._clean_text(text)
+        if clean_text:
+            parts.append(clean_text)
+        if image_path is not None and image_path.exists():
+            caption = self._captioner.caption(image_path)
+            ocr_text = run_ocr(image_path)
+            if caption:
+                parts.append(f"Image description: {caption}")
+            if ocr_text:
+                parts.append(f"OCR text: {ocr_text}")
+            if not caption and not ocr_text:
+                parts.append(f"Image file name: {image_path.name}")
+        return "\n\n".join(parts) if parts else "image retrieval query"
 
     def embed_images(self, image_paths: list[Path], fallback_texts: list[str]) -> list[list[float]]:
         if not image_paths:
             return []
+        if self._openai_mode:
+            return self._text_embedder.embed_documents(fallback_texts)
         if self._clip:
             try:
                 from PIL import Image
@@ -79,7 +118,9 @@ class VisionEmbedder:
                 logger.warning("CLIP image encoding failed, using text fallback: %s", exc)
         return self._fallback.embed_documents(fallback_texts)
 
-    def embed_query(self, text: str) -> list[float]:
+    def embed_query(self, text: str, image_path: Path | None = None) -> list[float]:
+        if self._openai_mode:
+            return self._text_embedder.embed_query(self._build_query_text(text, image_path=image_path))
         if self._clip:
             try:
                 vector = self._clip.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]

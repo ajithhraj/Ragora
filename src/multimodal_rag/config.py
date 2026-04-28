@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     ingestion_skip_unchanged_files: bool = True
 
     orchestrator: Literal["langchain", "llamaindex"] = "langchain"
-    llm_provider: Literal["local", "openai", "anthropic", "ollama", "llamaindex"] = "local"
+    llm_provider: Literal["auto", "local", "openai", "anthropic", "ollama", "llamaindex"] = "auto"
 
     openai_api_key: str | None = None
     chat_model: str = "gpt-4.1-mini"
@@ -108,6 +108,17 @@ class Settings(BaseSettings):
             if key:
                 mapping[tenant] = key
         return mapping
+
+    def has_openai_api_key(self) -> bool:
+        return bool((self.openai_api_key or "").strip())
+
+    def resolved_llm_provider(self) -> Literal["local", "openai", "anthropic", "ollama", "llamaindex"]:
+        requested = (self.llm_provider or "auto").strip().lower()
+        if requested in {"auto", "local"} and self.has_openai_api_key():
+            return "openai"
+        if requested in {"auto", "", None}:  # type: ignore[comparison-overlap]
+            return "local"
+        return requested  # type: ignore[return-value]
 
 
 @lru_cache(maxsize=1)
