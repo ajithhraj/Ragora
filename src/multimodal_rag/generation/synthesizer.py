@@ -49,9 +49,12 @@ class AnswerSynthesizer:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._llm_provider = (settings.llm_provider or "openai").lower()
+        self._strict = settings.strict_api_only_mode()
 
     def _get_langchain_llm(self):
         if not self.settings.openai_api_key:
+            if self._strict:
+                raise RuntimeError("OpenAI API key is required for answer generation in strict API-only mode.")
             return None
         try:
             from langchain_openai import ChatOpenAI
@@ -62,6 +65,8 @@ class AnswerSynthesizer:
                 temperature=0.0,
             )
         except Exception as exc:
+            if self._strict:
+                raise RuntimeError("OpenAI chat client is unavailable in strict API-only mode.") from exc
             logger.warning("Could not initialize LangChain/OpenAI client: %s", exc)
             return None
 
@@ -89,12 +94,16 @@ class AnswerSynthesizer:
             )
             return self._chunk_to_text(response.content).strip()
         except Exception as exc:
+            if self._strict:
+                raise RuntimeError("OpenAI generation failed in strict API-only mode.") from exc
             logger.warning("OpenAI generation failed: %s", exc)
             return self._fallback_answer(question, hits)
 
     def _stream_langchain(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
         llm = self._get_langchain_llm()
         if not llm:
+            if self._strict:
+                raise RuntimeError("OpenAI streaming requires a valid OpenAI client in strict API-only mode.")
             yield self._fallback_answer(question, hits)
             return
 
@@ -112,6 +121,8 @@ class AnswerSynthesizer:
                 if text:
                     yield text
         except Exception as exc:
+            if self._strict:
+                raise RuntimeError("OpenAI streaming failed in strict API-only mode.") from exc
             logger.warning("OpenAI streaming failed: %s", exc)
             yield self._fallback_answer(question, hits)
 

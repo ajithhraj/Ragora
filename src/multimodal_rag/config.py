@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     orchestrator: Literal["langchain", "llamaindex"] = "langchain"
     llm_provider: Literal["openai", "anthropic", "ollama", "llamaindex"] = "openai"
+    api_only_mode: bool = False
 
     openai_api_key: str | None = None
     chat_model: str = "gpt-4.1-mini"
@@ -112,6 +113,10 @@ class Settings(BaseSettings):
                 continue
             mapping[tenant] = key
         return mapping
+
+    def strict_api_only_mode(self) -> bool:
+        provider = self.llm_provider.lower()
+        return self.api_only_mode or (provider == "openai" and bool(self.openai_api_key))
 
 
 @lru_cache(maxsize=1)

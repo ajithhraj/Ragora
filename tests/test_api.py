@@ -14,6 +14,13 @@ class StubEngine:
         self.last_query_image_path = None
         self.last_tenant_id = None
         self.last_retrieval_mode = None
+        self.raise_query_error = False
+        self.last_reset_collection = None
+        self.synthesizer = type(
+            "SynthStub",
+            (),
+            {"stream": staticmethod(lambda question, hits: iter([f"stub:{question}"]))},
+        )()
 
     def ingest_paths(self, paths, collection=None, tenant_id=None):
         self.last_tenant_id = tenant_id
@@ -28,6 +35,8 @@ class StubEngine:
         retrieval_mode=None,
         tenant_id=None,
     ):
+        if self.raise_query_error:
+            raise RuntimeError("OpenAI API unavailable")
         self.last_query_image_path = query_image_path
         self.last_tenant_id = tenant_id
         self.last_retrieval_mode = retrieval_mode
@@ -54,6 +63,15 @@ class StubEngine:
             citations=[citation],
             retrieval_mode="hybrid",
         )
+
+    def reset_collection(self, collection=None, tenant_id=None):
+        self.last_reset_collection = (collection, tenant_id)
+        return {
+            "collection": f"tenant-{tenant_id or 'public'}__{collection or 'default'}",
+            "vector_removed": 1,
+            "lexical_removed": True,
+            "manifest_removed": 1,
+        }
 
 
 def _build_settings(tmp_path: Path, **overrides) -> Settings:
@@ -112,6 +130,17 @@ def test_query_endpoint_passes_retrieval_mode(tmp_path):
     assert payload["corrected"] is False
     assert payload["grounded"] is True
     assert engine.last_retrieval_mode == "dense_only"
+
+
+def test_query_endpoint_returns_503_for_provider_failures(tmp_path):
+    settings = _build_settings(tmp_path)
+    engine = StubEngine(settings)
+    engine.raise_query_error = True
+    client = _build_client(engine)
+
+    response = client.post("/query", json={"question": "hello"})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "OpenAI API unavailable"
 
 
 def test_query_stream_endpoint_emits_sse_events(tmp_path):
@@ -269,3 +298,18 @@ def test_delete_ingest_job_returns_404_for_unknown_id(tmp_path):
 
     response = client.delete("/ingest-jobs/unknown-id")
     assert response.status_code == 404
+
+
+def test_reset_collection_endpoint(tmp_path):
+    settings = _build_settings(tmp_path)
+    engine = StubEngine(settings)
+    client = _build_client(engine)
+
+    response = client.post("/reset-collection", json={"collection": "default"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["collection"] == "tenant-public__default"
+    assert payload["vector_removed"] == 1
+    assert payload["lexical_removed"] is True
+    assert payload["manifest_removed"] == 1
+    assert engine.last_reset_collection == ("default", "public")

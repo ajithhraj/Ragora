@@ -19,6 +19,17 @@ class IngestResponse(BaseModel):
     image: int
 
 
+class ResetCollectionRequest(BaseModel):
+    collection: str | None = None
+
+
+class ResetCollectionResponse(BaseModel):
+    collection: str
+    vector_removed: int
+    lexical_removed: bool
+    manifest_removed: int
+
+
 IngestJobStatus = Literal["pending", "running", "done", "error"]
 
 

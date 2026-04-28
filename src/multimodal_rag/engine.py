@@ -29,7 +29,7 @@ class MultimodalRAG:
         self.settings = settings
         self.store = store or create_vector_store(settings)
         self.text_embedder = TextEmbedder(settings)
-        self.vision_embedder = VisionEmbedder()
+        self.vision_embedder = VisionEmbedder(settings)
         self.synthesizer = AnswerSynthesizer(settings)
         self.lexical_index = LexicalIndex(settings.storage_dir / "lexical")
         self.reranker = CrossEncoderReranker(
@@ -79,6 +79,26 @@ class MultimodalRAG:
         path = self._manifest_path(scoped_collection)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))
+
+    def reset_collection(
+        self,
+        collection: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, int | str | bool]:
+        target_collection = self._scoped_collection(collection, tenant_id)
+        manifest_path = self._manifest_path(target_collection)
+        vector_removed = self.store.delete_collection(target_collection)
+        lexical_removed = self.lexical_index.delete_collection(target_collection)
+        manifest_removed = 0
+        if manifest_path.exists():
+            manifest_path.unlink()
+            manifest_removed = 1
+        return {
+            "collection": target_collection,
+            "vector_removed": vector_removed,
+            "lexical_removed": lexical_removed,
+            "manifest_removed": manifest_removed,
+        }
 
     @staticmethod
     def _file_fingerprint(path: Path) -> str:

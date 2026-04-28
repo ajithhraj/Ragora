@@ -83,6 +83,14 @@ class LexicalIndex:
         self._cache.pop(collection, None)
         return removed
 
+    def delete_collection(self, collection: str) -> bool:
+        path = self._index_path(collection)
+        if not path.exists():
+            return False
+        path.unlink()
+        self._cache.pop(collection, None)
+        return True
+
     def _load_state(self, collection: str) -> _LexicalState:
         path = self._index_path(collection)
         if not path.exists():
@@ -133,6 +141,8 @@ class LexicalIndex:
         if state.bm25 is not None:
             raw_scores = state.bm25.get_scores(query_tokens)  # type: ignore[call-arg]
             scores = [float(score) for score in raw_scores]
+            if not any(score > 0 for score in scores):
+                scores = self._fallback_scores(query_tokens, state.tokenized)
         else:
             scores = self._fallback_scores(query_tokens, state.tokenized)
 

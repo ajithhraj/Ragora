@@ -20,6 +20,8 @@ from multimodal_rag.api.schemas import (
     IngestResponse,
     QueryRequest,
     QueryResponse,
+    ResetCollectionRequest,
+    ResetCollectionResponse,
     SourceItem,
 )
 from multimodal_rag.engine import MultimodalRAG
@@ -92,6 +94,10 @@ def _check_rate_limit(tenant_id: str, rpm: int) -> None:
     window.append(now)
 
 
+def _service_unavailable(exc: RuntimeError) -> HTTPException:
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Multimodal RAG API", version="0.2.0")
     _JOB_STORE.clear()
@@ -150,11 +156,14 @@ def create_app() -> FastAPI:
         tenant_id: str = Depends(rate_limit),
         engine: MultimodalRAG = Depends(get_engine),
     ) -> IngestResponse:
-        stats = engine.ingest_paths(
-            [Path(path) for path in payload.paths],
-            collection=payload.collection,
-            tenant_id=tenant_id,
-        )
+        try:
+            stats = engine.ingest_paths(
+                [Path(path) for path in payload.paths],
+                collection=payload.collection,
+                tenant_id=tenant_id,
+            )
+        except RuntimeError as exc:
+            raise _service_unavailable(exc) from exc
         return IngestResponse(**stats)
 
     @app.post("/ingest-files", response_model=IngestJobItem, status_code=202)
@@ -170,7 +179,8 @@ def create_app() -> FastAPI:
 
         saved_paths: list[Path] = []
         for upload in files:
-            target = upload_dir / upload.filename
+            safe_name = Path(upload.filename or "upload.bin").name
+            target = upload_dir / safe_name
             content = await upload.read()
             target.write_bytes(content)
             saved_paths.append(target)
@@ -187,7 +197,7 @@ def create_app() -> FastAPI:
                 _set_job(job_id, "error", error=str(exc))
 
         background_tasks.add_task(_run)
-        return {"job_id": job_id, "status": "pending", "file_count": len(saved_paths)}
+        return _JOB_STORE[job_id]
 
     @app.get("/ingest-jobs", response_model=list[IngestJobItem])
     def list_ingest_jobs(
@@ -216,13 +226,16 @@ def create_app() -> FastAPI:
         engine: MultimodalRAG = Depends(get_engine),
     ) -> QueryResponse:
         start = perf_counter()
-        result = engine.query(
-            question=payload.question,
-            collection=payload.collection,
-            top_k=payload.top_k,
-            retrieval_mode=payload.retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        try:
+            result = engine.query(
+                question=payload.question,
+                collection=payload.collection,
+                top_k=payload.top_k,
+                retrieval_mode=payload.retrieval_mode,
+                tenant_id=tenant_id,
+            )
+        except RuntimeError as exc:
+            raise _service_unavailable(exc) from exc
         latency_ms = (perf_counter() - start) * 1000.0
         return to_query_response(result, latency_ms=latency_ms)
 
@@ -233,13 +246,16 @@ def create_app() -> FastAPI:
         engine: MultimodalRAG = Depends(get_engine),
     ) -> StreamingResponse:
         start = perf_counter()
-        retrieval_result = engine.query(
-            question=payload.question,
-            collection=payload.collection,
-            top_k=payload.top_k,
-            retrieval_mode=payload.retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        try:
+            retrieval_result = engine.query(
+                question=payload.question,
+                collection=payload.collection,
+                top_k=payload.top_k,
+                retrieval_mode=payload.retrieval_mode,
+                tenant_id=tenant_id,
+            )
+        except RuntimeError as exc:
+            raise _service_unavailable(exc) from exc
         retrieval_latency_ms = (perf_counter() - start) * 1000.0
         response = to_query_response(retrieval_result, latency_ms=retrieval_latency_ms)
 
@@ -294,23 +310,35 @@ def create_app() -> FastAPI:
         if image is not None:
             query_dir = engine.settings.storage_dir / "tmp_queries"
             query_dir.mkdir(parents=True, exist_ok=True)
-            filename = image.filename or "query_image.bin"
+            filename = Path(image.filename or "query_image.bin").name
             query_image_path = query_dir / filename
             content = await image.read()
             query_image_path.write_bytes(content)
 
         query_text = prompt or "Find visually similar or related context for this image."
         start = perf_counter()
-        result = engine.query(
-            question=query_text,
-            collection=collection,
-            top_k=top_k,
-            query_image_path=query_image_path,
-            retrieval_mode=retrieval_mode,
-            tenant_id=tenant_id,
-        )
+        try:
+            result = engine.query(
+                question=query_text,
+                collection=collection,
+                top_k=top_k,
+                query_image_path=query_image_path,
+                retrieval_mode=retrieval_mode,
+                tenant_id=tenant_id,
+            )
+        except RuntimeError as exc:
+            raise _service_unavailable(exc) from exc
         latency_ms = (perf_counter() - start) * 1000.0
         return to_query_response(result, latency_ms=latency_ms)
+
+    @app.post("/reset-collection", response_model=ResetCollectionResponse)
+    def reset_collection(
+        payload: ResetCollectionRequest,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> ResetCollectionResponse:
+        result = engine.reset_collection(collection=payload.collection, tenant_id=tenant_id)
+        return ResetCollectionResponse(**result)
 
     return app
 

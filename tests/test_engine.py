@@ -38,6 +38,15 @@ class FakeStore(VectorStore):
         self._items[key] = kept
         return removed
 
+    def delete_collection(self, collection: str):  # type: ignore[override]
+        prefix = f"{collection}:"
+        removed = 0
+        for key in list(self._items):
+            if key.startswith(prefix):
+                removed += 1
+                self._items.pop(key, None)
+        return removed
+
 
 class DummyEmbedder:
     def embed_documents(self, texts):

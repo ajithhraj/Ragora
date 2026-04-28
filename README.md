@@ -25,6 +25,7 @@ It ships with:
 - A FastAPI service with async ingest jobs and SSE query streaming
 - Multiple vector backends (`faiss`, `qdrant`)
 - Multiple LLM backends (`openai`, `anthropic`, `ollama`, `llamaindex`)
+- Strict OpenAI-only mode when you want the full pipeline to avoid local fallbacks
 
 ## Key Capabilities
 
@@ -66,6 +67,7 @@ API docs: `http://localhost:8000/docs`
 | `GET` | `/ingest-jobs` | List recent async ingest jobs |
 | `GET` | `/ingest-jobs/{job_id}` | Check async ingest status |
 | `DELETE` | `/ingest-jobs/{job_id}` | Delete job metadata |
+| `POST` | `/reset-collection` | Clear a tenant-scoped indexed collection |
 | `POST` | `/query` | JSON query response with citations |
 | `POST` | `/query-stream` | SSE streaming query tokens |
 | `POST` | `/query-multimodal` | Multipart query with optional image |
@@ -106,6 +108,7 @@ Switch generation provider without changing code:
 # OpenAI (default)
 MMRAG_LLM_PROVIDER=openai
 MMRAG_OPENAI_API_KEY=sk-...
+MMRAG_API_ONLY_MODE=true
 
 # Anthropic
 MMRAG_LLM_PROVIDER=anthropic
@@ -162,6 +165,7 @@ Important variables:
 - `MMRAG_COLLECTION`
 - `MMRAG_DEFAULT_TENANT`
 - `MMRAG_LLM_PROVIDER`
+- `MMRAG_API_ONLY_MODE`
 - `MMRAG_OPENAI_API_KEY`
 - `MMRAG_CHAT_MODEL`
 - `MMRAG_ANTHROPIC_API_KEY`
