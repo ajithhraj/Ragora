@@ -6,7 +6,7 @@
 [![LLM](https://img.shields.io/badge/llm-openai%20%7C%20anthropic%20%7C%20ollama-orange)](https://github.com/ajithhraj/multimodal-rag-system)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Production-style multimodal Retrieval-Augmented Generation (RAG) system for PDFs, images, and tabular data.
+Production-style multimodal Retrieval-Augmented Generation (RAG) system for PDFs, images, and tabular data, with optional session memory for longer-running workflows.
 
 ![Architecture](docs/assets/architecture.svg)
 
@@ -17,6 +17,7 @@ This project ingests and queries across:
 - PDFs with layout-aware text and table extraction
 - Images with CLIP embeddings, optional OCR, and caption context
 - CSV / TSV files normalized into retrieval-friendly chunks
+- Session memory for user preferences, project facts, and recurring instructions
 
 It ships with:
 
@@ -37,6 +38,25 @@ It ships with:
 - Multi-tenant data isolation with optional tenant API-key auth
 - Per-tenant API rate limiting
 - Real token streaming through `/query-stream` (SSE)
+- Session-scoped memory with decay, pinning, reinforcement, and explicit forgetting
+- Strict OpenAI mode that disables silent local fallback when you want a single-provider path
+
+## What It Does
+
+The system combines two layers:
+
+- `RAG layer`
+  Retrieves grounded evidence from indexed files and uses that evidence to answer questions.
+- `Memory layer`
+  Stores durable session context such as preferences, recurring goals, and project facts, then injects relevant memories back into later prompts.
+
+That means you can ask questions like:
+
+- “Summarize the key risks in this contract”
+- “Find similar chart patterns from the uploaded slides”
+- “Explain this architecture, but keep it concise for a product demo”
+
+The answer still comes from retrieved sources, but memory can shape how the answer is framed when that context is relevant.
 
 ## Quickstart
 
@@ -51,7 +71,8 @@ copy .env.example .env
 
 ```bash
 mmrag ingest ./data --tenant acme
-mmrag ask "Summarize key contract risks" --tenant acme
+mmrag remember "remember I want concise demo-style answers" --tenant acme --session raj-demo --pin
+mmrag ask "Summarize key contract risks" --tenant acme --session raj-demo
 mmrag ask "Find similar chart patterns" --image ./data/query_chart.png --tenant acme
 mmrag serve --host 0.0.0.0 --port 8000
 ```
@@ -94,7 +115,7 @@ curl -X POST http://localhost:8000/ingest-files \
 curl -X POST http://localhost:8000/query-stream \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
-  -d "{\"question\":\"What encryption standard is required?\"}" \
+  -d "{\"question\":\"What encryption standard is required?\",\"session_id\":\"raj-demo\"}" \
   --no-buffer
 ```
 
@@ -104,6 +125,7 @@ curl -X POST http://localhost:8000/query-stream \
 curl -X POST http://localhost:8000/query-multimodal \
   -H "X-Tenant-ID: acme" \
   -F "question=Find similar chart patterns" \
+  -F "session_id=raj-demo" \
   -F "image=@./data/query_chart.png"
 ```
 
@@ -119,6 +141,15 @@ curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
   -d "{\"question\":\"summarize the risks\",\"session_id\":\"raj-demo\"}"
+```
+
+### Reset a Stale Collection
+
+```bash
+curl -X POST http://localhost:8000/reset-collection \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: acme" \
+  -d "{\"collection\":\"default\"}"
 ```
 
 ## LLM Providers
@@ -156,6 +187,29 @@ pip install -e ".[ollama]"
 - Optional API-key auth:
   - `MMRAG_AUTH_ENABLED=true`
   - `MMRAG_AUTH_TENANT_API_KEYS=tenant_a:key_a,tenant_b:key_b`
+
+## Session Memory
+
+Session memory is intentionally separate from document retrieval:
+
+- documents remain the ground truth for factual answers
+- memory stores conversational context that may matter later
+- memories are scoped by `tenant + session_id`
+- pinned memories decay more slowly
+- weak memories fade over time and can be pruned automatically
+
+Good memory examples:
+
+- “I prefer concise answers”
+- “This repo is for an interview demo”
+- “Focus on architecture and risks first”
+- “Call this project Raj’s RAG”
+
+Poor memory examples:
+
+- one-off document questions
+- temporary OCR noise
+- long raw chat dumps that should stay in retrieval history instead
 
 ## Rate Limiting
 
@@ -222,6 +276,7 @@ mmrag eval <dataset-path> [--tenant <id>] [--ablation]
 
 ```text
 src/multimodal_rag/
+  memory/         # session memory extraction, decay, ranking, persistence
   ingestion/      # pdf/image/table parsing and chunking
   embedding/      # text and vision embedders
   storage/        # faiss and qdrant backends
