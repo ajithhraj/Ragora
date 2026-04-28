@@ -11,6 +11,7 @@ from multimodal_rag.config import Settings, get_settings
 from multimodal_rag.embedding.providers import TextEmbedder, VisionEmbedder
 from multimodal_rag.generation.synthesizer import AnswerSynthesizer
 from multimodal_rag.ingestion.loader import discover_files, ingest_files
+from multimodal_rag.memory import MemoryStore
 from multimodal_rag.models import Citation, Chunk, Modality, QueryAnswer, RetrievalHit
 from multimodal_rag.retrieval import CrossEncoderReranker, LexicalIndex, reciprocal_rank_fusion
 from multimodal_rag.storage.base import VectorStore
@@ -32,6 +33,7 @@ class MultimodalRAG:
         self.vision_embedder = VisionEmbedder(settings)
         self.synthesizer = AnswerSynthesizer(settings)
         self.lexical_index = LexicalIndex(settings.storage_dir / "lexical")
+        self.memory_store = MemoryStore(settings, self.text_embedder)
         self.reranker = CrossEncoderReranker(
             enabled=settings.retrieval_enable_reranker,
             model_name=settings.retrieval_reranker_model,
@@ -481,8 +483,10 @@ class MultimodalRAG:
         query_image_path: Path | None = None,
         retrieval_mode: str | None = None,
         tenant_id: str | None = None,
+        session_id: str | None = None,
     ) -> QueryAnswer:
         target_collection = self._scoped_collection(collection, tenant_id)
+        resolved_tenant = self._resolve_tenant(tenant_id)
         per_modality_k = top_k or self.settings.retrieval_top_k_per_modality
         initial_mode = self._resolve_retrieval_mode(retrieval_mode, self._default_retrieval_mode())
 
@@ -538,11 +542,30 @@ class MultimodalRAG:
                 final_mode = corrected_mode
                 corrected = True
 
-        answer = self.synthesizer.generate(question, final_hits)
+        memory_context = ""
+        memory_count = 0
+        if self.settings.memory_enabled and session_id:
+            memory_context = self.memory_store.build_context(
+                question,
+                tenant_id=resolved_tenant,
+                session_id=session_id,
+                top_k=self.settings.memory_top_k,
+            )
+            memory_count = memory_context.count("\n") - 1 if memory_context else 0
+
+        answer = self.synthesizer.generate(question, final_hits, memory_context=memory_context)
         citations = self._build_citations(final_hits)
         grounded = len(citations) >= self.settings.response_min_citations
         if self.settings.response_require_citations and not grounded:
             answer = self.settings.response_ungrounded_fallback_text
+
+        if self.settings.memory_enabled and session_id and self.settings.memory_auto_store_queries:
+            self.memory_store.remember(
+                question,
+                tenant_id=resolved_tenant,
+                session_id=session_id,
+                metadata={"source": "query"},
+            )
         return QueryAnswer(
             answer=answer,
             hits=final_hits,
@@ -550,6 +573,7 @@ class MultimodalRAG:
             retrieval_mode=final_mode,
             corrected=corrected,
             grounded=grounded,
+            memory_context=memory_context or None,
             retrieval_diagnostics={
                 "initial_mode": initial_mode,
                 "final_mode": final_mode,
@@ -557,5 +581,57 @@ class MultimodalRAG:
                 "final_quality": self._quality_stats(final_hits),
                 "auto_correction_enabled": can_auto_correct,
                 "query_variants": query_variants,
+                "memory_enabled": bool(self.settings.memory_enabled and session_id),
+                "memory_session_id": session_id,
+                "memory_context_items": max(memory_count, 0),
             },
         )
+
+    def remember(
+        self,
+        message: str,
+        *,
+        tenant_id: str | None = None,
+        session_id: str,
+        pinned: bool = False,
+    ):
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.remember(
+            message,
+            tenant_id=resolved_tenant,
+            session_id=session_id,
+            pinned=pinned,
+            metadata={"source": "manual"},
+        )
+
+    def query_memory(
+        self,
+        query: str,
+        *,
+        tenant_id: str | None = None,
+        session_id: str,
+        top_k: int | None = None,
+    ):
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.retrieve(
+            query,
+            tenant_id=resolved_tenant,
+            session_id=session_id,
+            top_k=top_k,
+        )
+
+    def export_memory(self, *, tenant_id: str | None = None, session_id: str):
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.export(tenant_id=resolved_tenant, session_id=session_id)
+
+    def memory_stats(self, *, tenant_id: str | None = None, session_id: str):
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.stats(tenant_id=resolved_tenant, session_id=session_id)
+
+    def forget_memory(self, memory_id: str, *, tenant_id: str | None = None, session_id: str) -> bool:
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.forget(memory_id, tenant_id=resolved_tenant, session_id=session_id)
+
+    def reinforce_memory(self, memory_id: str, *, tenant_id: str | None = None, session_id: str):
+        resolved_tenant = self._resolve_tenant(tenant_id)
+        return self.memory_store.reinforce(memory_id, tenant_id=resolved_tenant, session_id=session_id)

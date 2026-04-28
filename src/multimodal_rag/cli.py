@@ -49,6 +49,7 @@ def ask(
     question: str = typer.Argument(..., help="Question for retrieval + generation."),
     image: Path | None = typer.Option(None, help="Optional query image path for multimodal retrieval."),
     tenant: str | None = typer.Option(None, help="Tenant namespace for retrieval."),
+    session: str | None = typer.Option(None, help="Optional session id for conversational memory."),
     collection: str | None = typer.Option(None, help="Collection name."),
     top_k: int | None = typer.Option(None, min=1, max=50, help="Top-k per modality."),
     retrieval_mode: Literal["dense_only", "hybrid", "hybrid_rerank"] | None = typer.Option(
@@ -67,6 +68,7 @@ def ask(
         query_image_path=image,
         retrieval_mode=retrieval_mode,
         tenant_id=tenant,
+        session_id=session,
     )
     typer.echo(result.answer)
     if result.citations:
@@ -83,6 +85,46 @@ def ask(
                 f"- [{hit.chunk.modality.value}] {hit.chunk.source_path} "
                 f"(score={hit.score:.4f})"
             )
+
+
+@app.command()
+def remember(
+    message: str = typer.Argument(..., help="Stable fact or preference to store in session memory."),
+    session: str = typer.Option(..., help="Session id for memory scope."),
+    tenant: str | None = typer.Option(None, help="Tenant namespace for memory."),
+    pin: bool = typer.Option(False, "--pin", help="Pin the memory so it decays more slowly."),
+    backend: Literal["faiss", "qdrant"] | None = typer.Option(None, help="Vector backend override."),
+) -> None:
+    engine = _build_engine(backend)
+    nodes = engine.remember(message, tenant_id=tenant, session_id=session, pinned=pin)
+    if not nodes:
+        typer.echo("No memory candidates were extracted from that message.")
+        raise typer.Exit(code=0)
+    for node in nodes:
+        typer.echo(
+            f"[{node.entity_type}] {node.content} "
+            f"(importance={node.importance:.2f}, pinned={'yes' if node.pinned else 'no'})"
+        )
+
+
+@app.command("memory")
+def memory_query(
+    query: str = typer.Argument(..., help="Query against session memory."),
+    session: str = typer.Option(..., help="Session id for memory scope."),
+    tenant: str | None = typer.Option(None, help="Tenant namespace for memory."),
+    top_k: int | None = typer.Option(None, min=1, max=20, help="Maximum memory items to return."),
+    backend: Literal["faiss", "qdrant"] | None = typer.Option(None, help="Vector backend override."),
+) -> None:
+    engine = _build_engine(backend)
+    nodes = engine.query_memory(query, tenant_id=tenant, session_id=session, top_k=top_k)
+    if not nodes:
+        typer.echo("No relevant memories found.")
+        raise typer.Exit(code=0)
+    for node in nodes:
+        typer.echo(
+            f"[{node.entity_type}] {node.content} "
+            f"(importance={node.importance:.2f}, pinned={'yes' if node.pinned else 'no'}, access={node.access_count})"
+        )
 
 
 @app.command()

@@ -18,6 +18,10 @@ from multimodal_rag.api.schemas import (
     IngestJobItem,
     IngestPathsRequest,
     IngestResponse,
+    MemoryIngestRequest,
+    MemoryItem,
+    MemoryQueryRequest,
+    MemoryStatsResponse,
     QueryRequest,
     QueryResponse,
     ResetCollectionRequest,
@@ -233,6 +237,7 @@ def create_app() -> FastAPI:
                 top_k=payload.top_k,
                 retrieval_mode=payload.retrieval_mode,
                 tenant_id=tenant_id,
+                session_id=payload.session_id,
             )
         except RuntimeError as exc:
             raise _service_unavailable(exc) from exc
@@ -253,6 +258,7 @@ def create_app() -> FastAPI:
                 top_k=payload.top_k,
                 retrieval_mode=payload.retrieval_mode,
                 tenant_id=tenant_id,
+                session_id=payload.session_id,
             )
         except RuntimeError as exc:
             raise _service_unavailable(exc) from exc
@@ -270,7 +276,14 @@ def create_app() -> FastAPI:
                 },
             )
             full_answer_parts: list[str] = []
-            for idx, token in enumerate(engine.synthesizer.stream(payload.question, retrieval_result.hits), start=1):
+            for idx, token in enumerate(
+                engine.synthesizer.stream(
+                    payload.question,
+                    retrieval_result.hits,
+                    memory_context=retrieval_result.memory_context or "",
+                ),
+                start=1,
+            ):
                 full_answer_parts.append(token)
                 yield _sse_event("token", {"index": idx, "delta": token})
             full_answer = "".join(full_answer_parts)
@@ -297,6 +310,7 @@ def create_app() -> FastAPI:
         collection: str | None = Form(default=None),
         top_k: int | None = Form(default=None),
         retrieval_mode: Literal["dense_only", "hybrid", "hybrid_rerank"] | None = Form(default=None),
+        session_id: str | None = Form(default=None),
         tenant_id: str = Depends(rate_limit),
         engine: MultimodalRAG = Depends(get_engine),
     ) -> QueryResponse:
@@ -325,11 +339,125 @@ def create_app() -> FastAPI:
                 query_image_path=query_image_path,
                 retrieval_mode=retrieval_mode,
                 tenant_id=tenant_id,
+                session_id=session_id,
             )
         except RuntimeError as exc:
             raise _service_unavailable(exc) from exc
         latency_ms = (perf_counter() - start) * 1000.0
         return to_query_response(result, latency_ms=latency_ms)
+
+    @app.post("/memory/ingest", response_model=list[MemoryItem])
+    def memory_ingest(
+        payload: MemoryIngestRequest,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> list[MemoryItem]:
+        nodes = engine.remember(
+            payload.message,
+            tenant_id=tenant_id,
+            session_id=payload.session_id,
+            pinned=payload.pinned,
+        )
+        return [
+            MemoryItem(
+                id=node.id,
+                content=node.content,
+                entity_type=node.entity_type,
+                importance=node.importance,
+                access_count=node.access_count,
+                pinned=node.pinned,
+                relations=list(node.relations),
+                metadata=dict(node.metadata),
+            )
+            for node in nodes
+        ]
+
+    @app.post("/memory/query", response_model=list[MemoryItem])
+    def memory_query(
+        payload: MemoryQueryRequest,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> list[MemoryItem]:
+        nodes = engine.query_memory(
+            payload.query,
+            tenant_id=tenant_id,
+            session_id=payload.session_id,
+            top_k=payload.top_k,
+        )
+        return [
+            MemoryItem(
+                id=node.id,
+                content=node.content,
+                entity_type=node.entity_type,
+                importance=node.importance,
+                access_count=node.access_count,
+                pinned=node.pinned,
+                relations=list(node.relations),
+                metadata=dict(node.metadata),
+            )
+            for node in nodes
+        ]
+
+    @app.get("/memory/export", response_model=list[MemoryItem])
+    def memory_export(
+        session_id: str,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> list[MemoryItem]:
+        nodes = engine.export_memory(tenant_id=tenant_id, session_id=session_id)
+        return [
+            MemoryItem(
+                id=node.id,
+                content=node.content,
+                entity_type=node.entity_type,
+                importance=node.importance,
+                access_count=node.access_count,
+                pinned=node.pinned,
+                relations=list(node.relations),
+                metadata=dict(node.metadata),
+            )
+            for node in nodes
+        ]
+
+    @app.get("/memory/stats", response_model=MemoryStatsResponse)
+    def memory_stats(
+        session_id: str,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> MemoryStatsResponse:
+        return MemoryStatsResponse(**engine.memory_stats(tenant_id=tenant_id, session_id=session_id))
+
+    @app.post("/memory/{memory_id}/reinforce", response_model=MemoryItem)
+    def memory_reinforce(
+        memory_id: str,
+        session_id: str,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> MemoryItem:
+        node = engine.reinforce_memory(memory_id, tenant_id=tenant_id, session_id=session_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail=f"Memory '{memory_id}' not found.")
+        return MemoryItem(
+            id=node.id,
+            content=node.content,
+            entity_type=node.entity_type,
+            importance=node.importance,
+            access_count=node.access_count,
+            pinned=node.pinned,
+            relations=list(node.relations),
+            metadata=dict(node.metadata),
+        )
+
+    @app.delete("/memory/{memory_id}", status_code=204)
+    def memory_delete(
+        memory_id: str,
+        session_id: str,
+        tenant_id: str = Depends(rate_limit),
+        engine: MultimodalRAG = Depends(get_engine),
+    ) -> Response:
+        if not engine.forget_memory(memory_id, tenant_id=tenant_id, session_id=session_id):
+            raise HTTPException(status_code=404, detail=f"Memory '{memory_id}' not found.")
+        return Response(status_code=204)
 
     @app.post("/reset-collection", response_model=ResetCollectionResponse)
     def reset_collection(

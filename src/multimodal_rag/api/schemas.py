@@ -48,6 +48,7 @@ class QueryRequest(BaseModel):
     collection: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
     retrieval_mode: Literal["dense_only", "hybrid", "hybrid_rerank"] | None = None
+    session_id: str | None = None
 
 
 class SourceItem(BaseModel):
@@ -74,3 +75,32 @@ class QueryResponse(BaseModel):
     grounded: bool = True
     retrieval_diagnostics: dict[str, Any] = Field(default_factory=dict)
     latency_ms: float | None = None
+
+
+class MemoryIngestRequest(BaseModel):
+    message: str = Field(min_length=2)
+    session_id: str = Field(min_length=1)
+    pinned: bool = False
+
+
+class MemoryQueryRequest(BaseModel):
+    query: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    top_k: int | None = Field(default=None, ge=1, le=20)
+
+
+class MemoryItem(BaseModel):
+    id: str
+    content: str
+    entity_type: str
+    importance: float
+    access_count: int
+    pinned: bool
+    relations: list[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryStatsResponse(BaseModel):
+    count: int
+    pinned_count: int
+    avg_importance: float

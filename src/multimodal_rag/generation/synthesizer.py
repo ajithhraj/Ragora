@@ -34,15 +34,20 @@ def _system_prompt() -> str:
     )
 
 
-def _user_prompt(question: str, context: str) -> str:
-    return (
-        f"Question:\n{question}\n\n"
-        f"Context:\n{context}\n\n"
+def _user_prompt(question: str, context: str, memory_context: str = "") -> str:
+    sections = []
+    if memory_context.strip():
+        sections.append(memory_context.strip())
+    sections.append(f"Question:\n{question}")
+    sections.append(f"Context:\n{context}")
+    sections.append(
         "Instructions:\n"
         "- Use concise bullets when helpful.\n"
         "- Reference source file names in your answer.\n"
+        "- Treat memory as secondary context; retrieved sources remain the ground truth.\n"
         "- If data is missing, explicitly state what is missing."
     )
+    return "\n\n".join(sections)
 
 
 class AnswerSynthesizer:
@@ -78,7 +83,7 @@ class AnswerSynthesizer:
             return ""
         return str(value)
 
-    def _generate_langchain(self, question: str, hits: list[RetrievalHit]) -> str:
+    def _generate_langchain(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> str:
         llm = self._get_langchain_llm()
         if not llm:
             return self._fallback_answer(question, hits)
@@ -89,7 +94,7 @@ class AnswerSynthesizer:
             response = llm.invoke(
                 [
                     SystemMessage(content=_system_prompt()),
-                    HumanMessage(content=_user_prompt(question, context)),
+                    HumanMessage(content=_user_prompt(question, context, memory_context)),
                 ]
             )
             return self._chunk_to_text(response.content).strip()
@@ -99,7 +104,7 @@ class AnswerSynthesizer:
             logger.warning("OpenAI generation failed: %s", exc)
             return self._fallback_answer(question, hits)
 
-    def _stream_langchain(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
+    def _stream_langchain(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> Iterator[str]:
         llm = self._get_langchain_llm()
         if not llm:
             if self._strict:
@@ -114,7 +119,7 @@ class AnswerSynthesizer:
             for chunk in llm.stream(
                 [
                     SystemMessage(content=_system_prompt()),
-                    HumanMessage(content=_user_prompt(question, context)),
+                    HumanMessage(content=_user_prompt(question, context, memory_context)),
                 ]
             ):
                 text = self._chunk_to_text(getattr(chunk, "content", ""))
@@ -126,7 +131,7 @@ class AnswerSynthesizer:
             logger.warning("OpenAI streaming failed: %s", exc)
             yield self._fallback_answer(question, hits)
 
-    def _generate_anthropic(self, question: str, hits: list[RetrievalHit]) -> str:
+    def _generate_anthropic(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> str:
         if not self.settings.anthropic_api_key:
             return self._fallback_answer(question, hits)
         try:
@@ -138,7 +143,7 @@ class AnswerSynthesizer:
                 model=self.settings.anthropic_model,
                 max_tokens=1024,
                 system=_system_prompt(),
-                messages=[{"role": "user", "content": _user_prompt(question, context)}],
+                messages=[{"role": "user", "content": _user_prompt(question, context, memory_context)}],
             )
             if message.content:
                 return str(message.content[0].text).strip()
@@ -147,7 +152,7 @@ class AnswerSynthesizer:
             logger.warning("Anthropic generation failed: %s", exc)
             return self._fallback_answer(question, hits)
 
-    def _stream_anthropic(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
+    def _stream_anthropic(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> Iterator[str]:
         if not self.settings.anthropic_api_key:
             yield self._fallback_answer(question, hits)
             return
@@ -160,7 +165,7 @@ class AnswerSynthesizer:
                 model=self.settings.anthropic_model,
                 max_tokens=1024,
                 system=_system_prompt(),
-                messages=[{"role": "user", "content": _user_prompt(question, context)}],
+                messages=[{"role": "user", "content": _user_prompt(question, context, memory_context)}],
             ) as stream:
                 for text in stream.text_stream:
                     if text:
@@ -169,14 +174,14 @@ class AnswerSynthesizer:
             logger.warning("Anthropic streaming failed: %s", exc)
             yield self._fallback_answer(question, hits)
 
-    def _generate_ollama(self, question: str, hits: list[RetrievalHit]) -> str:
+    def _generate_ollama(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> str:
         try:
             import requests
 
             context = _format_context(hits)
             payload = {
                 "model": self.settings.ollama_model,
-                "prompt": f"{_system_prompt()}\n\n{_user_prompt(question, context)}",
+                "prompt": f"{_system_prompt()}\n\n{_user_prompt(question, context, memory_context)}",
                 "stream": False,
             }
             response = requests.post(
@@ -190,14 +195,14 @@ class AnswerSynthesizer:
             logger.warning("Ollama generation failed: %s", exc)
             return self._fallback_answer(question, hits)
 
-    def _stream_ollama(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
+    def _stream_ollama(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> Iterator[str]:
         try:
             import requests
 
             context = _format_context(hits)
             payload = {
                 "model": self.settings.ollama_model,
-                "prompt": f"{_system_prompt()}\n\n{_user_prompt(question, context)}",
+                "prompt": f"{_system_prompt()}\n\n{_user_prompt(question, context, memory_context)}",
                 "stream": True,
             }
             with requests.post(
@@ -220,7 +225,7 @@ class AnswerSynthesizer:
             logger.warning("Ollama streaming failed: %s", exc)
             yield self._fallback_answer(question, hits)
 
-    def _generate_llamaindex(self, question: str, hits: list[RetrievalHit]) -> str:
+    def _generate_llamaindex(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> str:
         try:
             from llama_index.core import Document, SummaryIndex
 
@@ -230,8 +235,8 @@ class AnswerSynthesizer:
             index = SummaryIndex.from_documents(docs)
             query_engine = index.as_query_engine()
             result = query_engine.query(
-                "Answer this question only from the retrieved multimodal context:\n"
-                f"{question}\n"
+                "Answer this question only from the retrieved multimodal context and optional memory context.\n"
+                f"{memory_context}\n\n{question}\n"
             )
             content = str(result).strip()
             return content if content else self._fallback_answer(question, hits)
@@ -250,25 +255,25 @@ class AnswerSynthesizer:
             )
         return "\n".join(lines)
 
-    def generate(self, question: str, hits: list[RetrievalHit]) -> str:
+    def generate(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> str:
         provider = self._llm_provider
         if provider == "anthropic":
-            return self._generate_anthropic(question, hits)
+            return self._generate_anthropic(question, hits, memory_context)
         if provider == "ollama":
-            return self._generate_ollama(question, hits)
+            return self._generate_ollama(question, hits, memory_context)
         if provider == "llamaindex":
-            return self._generate_llamaindex(question, hits)
-        return self._generate_langchain(question, hits)
+            return self._generate_llamaindex(question, hits, memory_context)
+        return self._generate_langchain(question, hits, memory_context)
 
-    def stream(self, question: str, hits: list[RetrievalHit]) -> Iterator[str]:
+    def stream(self, question: str, hits: list[RetrievalHit], memory_context: str = "") -> Iterator[str]:
         provider = self._llm_provider
         if provider == "anthropic":
-            yield from self._stream_anthropic(question, hits)
+            yield from self._stream_anthropic(question, hits, memory_context)
             return
         if provider == "ollama":
-            yield from self._stream_ollama(question, hits)
+            yield from self._stream_ollama(question, hits, memory_context)
             return
         if provider == "llamaindex":
-            yield self._generate_llamaindex(question, hits)
+            yield self._generate_llamaindex(question, hits, memory_context)
             return
-        yield from self._stream_langchain(question, hits)
+        yield from self._stream_langchain(question, hits, memory_context)

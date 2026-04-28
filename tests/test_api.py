@@ -14,12 +14,25 @@ class StubEngine:
         self.last_query_image_path = None
         self.last_tenant_id = None
         self.last_retrieval_mode = None
+        self.last_session_id = None
         self.raise_query_error = False
         self.last_reset_collection = None
+        self.memory_nodes = [
+            {
+                "id": "mem-1",
+                "content": "I prefer concise answers.",
+                "entity_type": "preference",
+                "importance": 0.84,
+                "access_count": 1,
+                "pinned": True,
+                "relations": [],
+                "metadata": {"source": "manual"},
+            }
+        ]
         self.synthesizer = type(
             "SynthStub",
             (),
-            {"stream": staticmethod(lambda question, hits: iter([f"stub:{question}"]))},
+            {"stream": staticmethod(lambda question, hits, memory_context="": iter([f"stub:{question}"]))},
         )()
 
     def ingest_paths(self, paths, collection=None, tenant_id=None):
@@ -34,12 +47,14 @@ class StubEngine:
         query_image_path=None,
         retrieval_mode=None,
         tenant_id=None,
+        session_id=None,
     ):
         if self.raise_query_error:
             raise RuntimeError("OpenAI API unavailable")
         self.last_query_image_path = query_image_path
         self.last_tenant_id = tenant_id
         self.last_retrieval_mode = retrieval_mode
+        self.last_session_id = session_id
         hit = RetrievalHit(
             chunk=Chunk(
                 chunk_id="x1",
@@ -62,6 +77,7 @@ class StubEngine:
             hits=[hit],
             citations=[citation],
             retrieval_mode="hybrid",
+            memory_context="[MEMORY CONTEXT]\n1. [PREFERENCE] I prefer concise answers.",
         )
 
     def reset_collection(self, collection=None, tenant_id=None):
@@ -72,6 +88,38 @@ class StubEngine:
             "lexical_removed": True,
             "manifest_removed": 1,
         }
+
+    def remember(self, message, tenant_id=None, session_id=None, pinned=False):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        return [type("Mem", (), self.memory_nodes[0])()]
+
+    def query_memory(self, query, tenant_id=None, session_id=None, top_k=None):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        return [type("Mem", (), self.memory_nodes[0])()]
+
+    def export_memory(self, tenant_id=None, session_id=None):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        return [type("Mem", (), self.memory_nodes[0])()]
+
+    def memory_stats(self, tenant_id=None, session_id=None):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        return {"count": 1, "pinned_count": 1, "avg_importance": 0.84}
+
+    def reinforce_memory(self, memory_id, tenant_id=None, session_id=None):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        if memory_id != "mem-1":
+            return None
+        return type("Mem", (), self.memory_nodes[0])()
+
+    def forget_memory(self, memory_id, tenant_id=None, session_id=None):
+        self.last_tenant_id = tenant_id
+        self.last_session_id = session_id
+        return memory_id == "mem-1"
 
 
 def _build_settings(tmp_path: Path, **overrides) -> Settings:
@@ -130,6 +178,16 @@ def test_query_endpoint_passes_retrieval_mode(tmp_path):
     assert payload["corrected"] is False
     assert payload["grounded"] is True
     assert engine.last_retrieval_mode == "dense_only"
+
+
+def test_query_endpoint_passes_session_id(tmp_path):
+    settings = _build_settings(tmp_path)
+    engine = StubEngine(settings)
+    client = _build_client(engine)
+
+    response = client.post("/query", json={"question": "hello", "session_id": "demo"})
+    assert response.status_code == 200
+    assert engine.last_session_id == "demo"
 
 
 def test_query_endpoint_returns_503_for_provider_failures(tmp_path):
@@ -313,3 +371,35 @@ def test_reset_collection_endpoint(tmp_path):
     assert payload["lexical_removed"] is True
     assert payload["manifest_removed"] == 1
     assert engine.last_reset_collection == ("default", "public")
+
+
+def test_memory_endpoints(tmp_path):
+    settings = _build_settings(tmp_path)
+    engine = StubEngine(settings)
+    client = _build_client(engine)
+
+    ingest_response = client.post(
+        "/memory/ingest",
+        json={"message": "remember I prefer concise answers", "session_id": "demo", "pinned": True},
+    )
+    assert ingest_response.status_code == 200
+    assert ingest_response.json()[0]["entity_type"] == "preference"
+    assert engine.last_session_id == "demo"
+
+    query_response = client.post("/memory/query", json={"query": "concise", "session_id": "demo"})
+    assert query_response.status_code == 200
+    assert query_response.json()[0]["id"] == "mem-1"
+
+    stats_response = client.get("/memory/stats", params={"session_id": "demo"})
+    assert stats_response.status_code == 200
+    assert stats_response.json()["count"] == 1
+
+    export_response = client.get("/memory/export", params={"session_id": "demo"})
+    assert export_response.status_code == 200
+    assert export_response.json()[0]["content"] == "I prefer concise answers."
+
+    reinforce_response = client.post("/memory/mem-1/reinforce", params={"session_id": "demo"})
+    assert reinforce_response.status_code == 200
+
+    delete_response = client.delete("/memory/mem-1", params={"session_id": "demo"})
+    assert delete_response.status_code == 204

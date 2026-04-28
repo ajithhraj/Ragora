@@ -71,7 +71,7 @@ class SpyVisionEmbedder(DummyVisionEmbedder):
 
 
 class DummySynthesizer:
-    def generate(self, question, hits):
+    def generate(self, question, hits, memory_context=""):
         return f"answer:{question}:{len(hits)}"
 
 

@@ -26,6 +26,7 @@ It ships with:
 - Multiple vector backends (`faiss`, `qdrant`)
 - Multiple LLM backends (`openai`, `anthropic`, `ollama`, `llamaindex`)
 - Strict OpenAI-only mode when you want the full pipeline to avoid local fallbacks
+- Session memory with decay, reinforcement, and prompt injection inspired by MemOS
 
 ## Key Capabilities
 
@@ -71,6 +72,12 @@ API docs: `http://localhost:8000/docs`
 | `POST` | `/query` | JSON query response with citations |
 | `POST` | `/query-stream` | SSE streaming query tokens |
 | `POST` | `/query-multimodal` | Multipart query with optional image |
+| `POST` | `/memory/ingest` | Store session memories from a user message |
+| `POST` | `/memory/query` | Retrieve ranked session memories |
+| `GET` | `/memory/export` | Export full session memory state |
+| `GET` | `/memory/stats` | Memory count, pin count, average importance |
+| `POST` | `/memory/{id}/reinforce` | Boost and pin one memory |
+| `DELETE` | `/memory/{id}` | Forget one memory |
 
 ### Async Ingest Example
 
@@ -98,6 +105,20 @@ curl -X POST http://localhost:8000/query-multimodal \
   -H "X-Tenant-ID: acme" \
   -F "question=Find similar chart patterns" \
   -F "image=@./data/query_chart.png"
+```
+
+### Memory Example
+
+```bash
+curl -X POST http://localhost:8000/memory/ingest \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: acme" \
+  -d "{\"message\":\"remember I prefer concise answers for product demos\",\"session_id\":\"raj-demo\",\"pinned\":true}"
+
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-ID: acme" \
+  -d "{\"question\":\"summarize the risks\",\"session_id\":\"raj-demo\"}"
 ```
 
 ## LLM Providers
@@ -178,6 +199,11 @@ Important variables:
 - `MMRAG_AUTH_TENANT_API_KEYS`
 - `MMRAG_QDRANT_URL`
 - `MMRAG_QDRANT_API_KEY`
+- `MMRAG_MEMORY_ENABLED`
+- `MMRAG_MEMORY_TOP_K`
+- `MMRAG_MEMORY_DECAY_RATE`
+- `MMRAG_MEMORY_PRUNE_THRESHOLD`
+- `MMRAG_MEMORY_AUTO_STORE_QUERIES`
 
 See `.env.example` for full defaults.
 
@@ -185,7 +211,9 @@ See `.env.example` for full defaults.
 
 ```bash
 mmrag ingest <path> [--tenant <id>] [--collection <name>]
-mmrag ask <question> [--tenant <id>] [--image <path>] [--retrieval-mode <mode>]
+mmrag ask <question> [--tenant <id>] [--session <id>] [--image <path>] [--retrieval-mode <mode>]
+mmrag remember <message> --session <id> [--tenant <id>] [--pin]
+mmrag memory <query> --session <id> [--tenant <id>]
 mmrag serve [--host 0.0.0.0] [--port 8000]
 mmrag eval <dataset-path> [--tenant <id>] [--ablation]
 ```

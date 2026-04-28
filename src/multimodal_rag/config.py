@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
     qdrant_path: Path = Path(".rag_store/qdrant")
     qdrant_collection_prefix: str = "mmrag"
+    memory_enabled: bool = True
+    memory_dir: Path = Path(".rag_store/memory")
+    memory_top_k: int = Field(default=5, ge=1, le=20)
+    memory_decay_rate: float = Field(default=0.008, ge=0.0, le=1.0)
+    memory_prune_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    memory_pinned_floor: float = Field(default=0.30, ge=0.0, le=1.0)
+    memory_auto_store_queries: bool = True
 
     retrieval_top_k_per_modality: int = Field(default=4, ge=1, le=50)
     retrieval_top_k_lexical: int = Field(default=12, ge=1, le=200)
@@ -87,6 +94,14 @@ class Settings(BaseSettings):
     auth_api_key_header: str = "X-API-Key"
     auth_tenant_header: str = "X-Tenant-ID"
     auth_tenant_api_keys: str | None = None
+
+    def model_post_init(self, __context) -> None:
+        default_storage_dir = Path(".rag_store")
+        if self.storage_dir != default_storage_dir:
+            if self.memory_dir == default_storage_dir / "memory":
+                self.memory_dir = self.storage_dir / "memory"
+            if self.qdrant_path == default_storage_dir / "qdrant":
+                self.qdrant_path = self.storage_dir / "qdrant"
 
     @staticmethod
     def normalize_tenant_id(raw: str) -> str:
@@ -123,4 +138,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    settings.memory_dir.mkdir(parents=True, exist_ok=True)
     return settings
